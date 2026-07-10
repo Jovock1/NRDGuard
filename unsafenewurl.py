@@ -536,7 +536,7 @@ def write_daily_digest(
     zero_flag_batches = classify_stats["zero_flag_batches"]
 
     lines = [
-        f"# UnsafeNewURL Daily Summary -- {now.strftime('%Y-%m-%d')}",
+        f"# NRDGuard Daily Summary -- {now.strftime('%Y-%m-%d')}",
         "",
         "## Domains Scanned",
         f"- Total domains fetched: {total_domains_scanned:,}",
@@ -713,7 +713,7 @@ def push_to_github():
 
     token = os.getenv("GITHUB_TOKEN")
     repo_url = os.getenv("GITHUB_REPO")
-    branch = os.getenv("GITHUB_BRANCH", "UnsafeNewURL")
+    branch = os.getenv("GITHUB_BRANCH", "main")
 
     if not token or not repo_url:
         log.warning("GITHUB_TOKEN or GITHUB_REPO not set; skipping GitHub push")
