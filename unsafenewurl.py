@@ -11,6 +11,7 @@ import hashlib
 import shutil
 import subprocess
 import collections.abc
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 import requests
@@ -356,6 +357,14 @@ def classify_batch(batch):
     return flagged
 
 
+def count_categories(flagged):
+    counts = Counter()
+    for entry in flagged:
+        _, _, category = entry.partition(",")
+        counts[category.strip()] += 1
+    return counts
+
+
 def classify_domains(domains):
     all_flagged = []
     zero_flag_batches = 0
@@ -372,6 +381,12 @@ def classify_domains(domains):
 
     log.info(f"Total flagged: {len(all_flagged):,}")
 
+    category_counts = count_categories(all_flagged)
+    if category_counts:
+        log.info("Category breakdown:")
+        for category, count in category_counts.most_common():
+            log.info(f"  {category}: {count:,}")
+
     if total_batches >= 3:
         zero_flag_rate = zero_flag_batches / total_batches
         if zero_flag_rate >= 0.8:
@@ -383,16 +398,25 @@ def classify_domains(domains):
                 zero_flag_batches, total_batches, zero_flag_rate * 100,
             )
 
-    return all_flagged
+    stats = {
+        "total_batches": total_batches,
+        "zero_flag_batches": zero_flag_batches,
+        "category_counts": category_counts,
+    }
+    return all_flagged, stats
+
+
+def logs_subdir(name):
+    subdir = Path("logs") / name
+    subdir.mkdir(parents=True, exist_ok=True)
+    return subdir
 
 
 def write_daily_log(flagged):
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
     now = datetime.now()
 
-    csv_path = make_unique_timestamped_path(log_dir, "flagged_domains", "csv", now)
-    json_path = make_unique_timestamped_path(log_dir, "flagged_domains", "json", now)
+    csv_path = make_unique_timestamped_path(logs_subdir("csv"), "flagged_domains", "csv", now)
+    json_path = make_unique_timestamped_path(logs_subdir("json"), "flagged_domains", "json", now)
 
     parsed_entries = []
     for entry in flagged:
@@ -421,17 +445,41 @@ def write_daily_log(flagged):
     return csv_path, json_path
 
 
+def write_category_summary(flagged):
+    now = datetime.now()
+
+    csv_path = make_unique_timestamped_path(logs_subdir("csv"), "category_summary", "csv", now)
+    json_path = make_unique_timestamped_path(logs_subdir("json"), "category_summary", "json", now)
+
+    category_counts = count_categories(flagged)
+    total = sum(category_counts.values())
+    rows = [{"category": category, "count": count} for category, count in category_counts.most_common()]
+
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["category", "count"])
+        writer.writeheader()
+        writer.writerows(rows)
+        writer.writerow({"category": "TOTAL", "count": total})
+
+    with json_path.open("w", encoding="utf-8") as handle:
+        json.dump({"total": total, "categories": rows}, handle, indent=2)
+        handle.write("\n")
+
+    register_created(csv_path)
+    register_created(json_path)
+    log.info(f"Saved category summary ({len(rows)} categories, {total:,} total) to {csv_path} and {json_path}")
+    return csv_path, json_path
+
+
 def write_compromised_log(entries):
     if not entries:
         log.info("No new compromised domains to log")
         return None
 
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
     now = datetime.now()
 
-    csv_path = make_unique_timestamped_path(log_dir, "compromised_added", "csv", now)
-    json_path = make_unique_timestamped_path(log_dir, "compromised_added", "json", now)
+    csv_path = make_unique_timestamped_path(logs_subdir("csv"), "compromised_added", "csv", now)
+    json_path = make_unique_timestamped_path(logs_subdir("json"), "compromised_added", "json", now)
 
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=["domain", "classification", "reason"])
@@ -445,6 +493,57 @@ def write_compromised_log(entries):
     register_created(json_path)
     log.info(f"Saved {len(entries)} newly added compromised domains to {csv_path} and {json_path}")
     return csv_path, json_path
+
+
+def write_daily_digest(
+    total_domains_scanned,
+    flagged,
+    classify_stats,
+    blocklist_total_after_classification,
+    compromised_fetched,
+    compromised_added,
+    final_blocklist_total,
+):
+    now = datetime.now()
+    digest_path = make_unique_timestamped_path(logs_subdir("daily_summary"), "daily_summary", "md", now)
+
+    category_counts = classify_stats["category_counts"]
+    total_batches = classify_stats["total_batches"]
+    zero_flag_batches = classify_stats["zero_flag_batches"]
+
+    lines = [
+        f"# UnsafeNewURL Daily Summary -- {now.strftime('%Y-%m-%d')}",
+        "",
+        "## Domains Scanned",
+        f"- Total domains fetched: {total_domains_scanned:,}",
+        f"- Batches processed: {total_batches:,} ({zero_flag_batches:,} returned zero flagged domains)",
+        "",
+        "## Classification Results",
+        f"- Total flagged: {len(flagged):,}",
+        f"- Blocklist total after classification: {blocklist_total_after_classification:,}",
+        "",
+        "### Category Breakdown",
+        "| Category | Count |",
+        "|---|---|",
+    ]
+    for category, count in category_counts.most_common():
+        lines.append(f"| {category} | {count:,} |")
+
+    lines += [
+        "",
+        "## Compromised Domains Feed",
+        f"- Domains fetched: {compromised_fetched:,}",
+        f"- Newly added to blocklist: {len(compromised_added):,}",
+        "",
+        "## Final Blocklist Size",
+        f"- {final_blocklist_total:,} domains",
+        "",
+    ]
+
+    digest_path.write_text("\n".join(lines), encoding="utf-8")
+    register_created(digest_path)
+    log.info(f"Saved daily digest to {digest_path}")
+    return digest_path
 
 
 def hash_file(path: Path) -> str:
@@ -766,6 +865,7 @@ def add_to_blocklist(flagged):
 
     register_created(blocklist_path)
     log.info(f"Blocklist updated. Total domains: {len(combined_domains):,}")
+    return len(combined_domains)
 
 
 def fetch_compromised_domains():
@@ -849,7 +949,7 @@ def add_compromised_to_blocklist(compromised):
     log.info(f"Blocklist updated with compromised domains. Total domains: {len(combined_domains):,}")
 
     write_compromised_log(added_entries)
-    return added_entries
+    return added_entries, len(combined_domains)
 
 
 def main():
@@ -859,11 +959,21 @@ def main():
     try:
         get_api_key()
         domains = fetch_domains()
-        flagged = classify_domains(domains)
+        flagged, classify_stats = classify_domains(domains)
         write_daily_log(flagged)
-        add_to_blocklist(flagged)
+        write_category_summary(flagged)
+        blocklist_total = add_to_blocklist(flagged)
         compromised = fetch_compromised_domains()
-        add_compromised_to_blocklist(compromised)
+        compromised_added, final_blocklist_total = add_compromised_to_blocklist(compromised)
+        write_daily_digest(
+            total_domains_scanned=len(domains),
+            flagged=flagged,
+            classify_stats=classify_stats,
+            blocklist_total_after_classification=blocklist_total,
+            compromised_fetched=len(compromised),
+            compromised_added=compromised_added,
+            final_blocklist_total=final_blocklist_total,
+        )
         hash_blocklist()
         push_to_github()
         log.info("=== Pipeline complete ===")
