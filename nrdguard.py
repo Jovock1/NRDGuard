@@ -1,3 +1,4 @@
+import argparse
 import io
 import json
 import os
@@ -305,7 +306,7 @@ def classify_batch(batch):
     user_input = chr(10).join(batch)
     resp_text = generate_with_llama(
         user_input,
-        max_tokens=4000,
+        max_tokens=6000,
         system_prompt=system_prompt,
         response_format=FLAGGED_DOMAINS_SCHEMA,
     )
@@ -431,8 +432,8 @@ def sanitize_csv_field(value):
     return value
 
 
-def write_daily_log(flagged):
-    now = datetime.now()
+def write_daily_log(flagged, when: datetime = None):
+    now = when or datetime.now()
 
     csv_path = make_unique_timestamped_path(logs_subdir("csv"), "flagged_domains", "csv", now)
     json_path = make_unique_timestamped_path(logs_subdir("json"), "flagged_domains", "json", now)
@@ -468,8 +469,8 @@ def write_daily_log(flagged):
     return csv_path, json_path
 
 
-def write_category_summary(flagged):
-    now = datetime.now()
+def write_category_summary(flagged, when: datetime = None):
+    now = when or datetime.now()
 
     csv_path = make_unique_timestamped_path(logs_subdir("csv"), "category_summary", "csv", now)
     json_path = make_unique_timestamped_path(logs_subdir("json"), "category_summary", "json", now)
@@ -495,12 +496,12 @@ def write_category_summary(flagged):
     return csv_path, json_path
 
 
-def write_compromised_log(entries):
+def write_compromised_log(entries, when: datetime = None):
     if not entries:
         log.info("No new compromised domains to log")
         return None
 
-    now = datetime.now()
+    now = when or datetime.now()
 
     csv_path = make_unique_timestamped_path(logs_subdir("csv"), "compromised_added", "csv", now)
     json_path = make_unique_timestamped_path(logs_subdir("json"), "compromised_added", "json", now)
@@ -527,8 +528,9 @@ def write_daily_digest(
     compromised_fetched,
     compromised_added,
     final_blocklist_total,
+    when: datetime = None,
 ):
-    now = datetime.now()
+    now = when or datetime.now()
     digest_path = make_unique_timestamped_path(logs_subdir("daily_summary"), "daily_summary", "md", now)
 
     category_counts = classify_stats["category_counts"]
@@ -632,6 +634,27 @@ def find_latest_archive(archives_dir: Path, prefix: str):
     return candidates[0] if candidates else None
 
 
+def find_archive_for_date(archives_dir: Path, prefix: str, date_str: str):
+    """Find the archive saved for a specific YYYY-MM-DD date.
+
+    A day with more than one run leaves extra `_1`, `_2`, ... suffixed
+    files (see make_unique_timestamped_path); this picks the most recent
+    of those over the bare dated file, since it reflects the last state
+    fetched that day.
+    """
+    exact = archives_dir / f"{prefix}_{date_str}.zip"
+    reruns = sorted(
+        archives_dir.glob(f"{prefix}_{date_str}_*.zip"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if reruns:
+        return reruns[0]
+    if exact.exists():
+        return exact
+    return None
+
+
 def write_hash_file(path: Path, digest: str) -> Path:
     if path.name.endswith(".sha256"):
         return path
@@ -712,7 +735,7 @@ def push_to_github():
         log.warning("git lfs setup failed or not available: %s", exc)
 
     token = os.getenv("GITHUB_TOKEN")
-    repo_url = os.getenv("GITHUB_REPO")
+    repo_url = os.getenv("GITHUB_REPO","Jovock1/NRDGuard")
     branch = os.getenv("GITHUB_BRANCH", "main")
 
     if not token or not repo_url:
@@ -820,7 +843,16 @@ def push_to_github():
         # exc's command/stdout/stderr never contain the token itself (only
         # the literal string "$GITHUB_TOKEN", resolved by the nested shell
         # at runtime, not by this process), so this is safe to log as-is.
+        # str(exc) alone omits stdout/stderr, which is where git's actual
+        # reason (auth failure, non-fast-forward, LFS error, etc.) lives --
+        # log those explicitly or every failure just says "exit status 1".
+        stderr = exc.stderr.decode("utf-8", "replace").strip() if exc.stderr else ""
+        stdout = exc.stdout.decode("utf-8", "replace").strip() if exc.stdout else ""
         log.warning("Git push failed: %s", exc)
+        if stderr:
+            log.warning("git stderr: %s", stderr)
+        if stdout:
+            log.warning("git stdout: %s", stdout)
         log.warning("Skipping GitHub push and continuing without failing the entire pipeline.")
         return None
 
@@ -887,7 +919,24 @@ def read_zip_member_text(archive_bytes, max_size=MAX_ARCHIVE_MEMBER_BYTES):
     return b"".join(chunks).decode()
 
 
-def fetch_domains():
+def fetch_domains(for_date: datetime = None):
+    repo_dir = Path(__file__).resolve().parent
+    archives_dir = repo_dir / "archives"
+    archives_dir.mkdir(exist_ok=True)
+
+    if for_date is not None:
+        date_str = for_date.strftime("%Y-%m-%d")
+        archive_path = find_archive_for_date(archives_dir, "domains", date_str)
+        if archive_path is None:
+            raise FileNotFoundError(
+                f"No domains archive found for {date_str} in {archives_dir}"
+            )
+        log.info(f"Replaying domains archive {archive_path}")
+        domains = read_zip_member_text(archive_path.read_bytes()).splitlines()
+        domains = [d.strip().lower() for d in domains if d.strip()]
+        log.info(f"Loaded {len(domains):,} domains.")
+        return domains
+
     log.info("Fetching domains from API")
     APICall = os.getenv('API_CALL', '0')
     if APICall == '0':
@@ -902,10 +951,6 @@ def fetch_domains():
     if DAILY_UPDATE == '0':
         log.error("DAILY environment variable not set")
         raise ValueError("DAILY environment variable not set")
-
-    repo_dir = Path(__file__).resolve().parent
-    archives_dir = repo_dir / "archives"
-    archives_dir.mkdir(exist_ok=True)
 
     latest_archive = find_latest_archive(archives_dir, "domains")
     url = f"{APICall}{URL_API_KEY}{DAILY_UPDATE}"
@@ -961,7 +1006,26 @@ def add_to_blocklist(flagged):
     return len(combined_domains)
 
 
-def fetch_compromised_domains():
+def fetch_compromised_domains(for_date: datetime = None):
+    repo_dir = Path(__file__).resolve().parent
+    archives_dir = repo_dir / "archives"
+    archives_dir.mkdir(exist_ok=True)
+
+    if for_date is not None:
+        date_str = for_date.strftime("%Y-%m-%d")
+        archive_path = find_archive_for_date(archives_dir, "compromised", date_str)
+        if archive_path is None:
+            log.warning(
+                f"No compromised archive found for {date_str} in {archives_dir}; "
+                "skipping compromised-domains step for this replay."
+            )
+            return []
+        log.info(f"Replaying compromised archive {archive_path}")
+        domains = read_zip_member_text(archive_path.read_bytes()).splitlines()
+        domains = [d.strip().lower() for d in domains if d.strip()]
+        log.info(f"Loaded {len(domains):,} domains.")
+        return domains
+
     log.info("Fetching known compromised domains from API")
     APICall = os.getenv('API_CALL2', '0')
     if APICall == '0':
@@ -975,10 +1039,6 @@ def fetch_compromised_domains():
     if MALWARE == '0':
         log.error("MALWARE_STRING environment variable not set")
         raise ValueError("MALWARE_STRING environment variable not set")
-
-    repo_dir = Path(__file__).resolve().parent
-    archives_dir = repo_dir / "archives"
-    archives_dir.mkdir(exist_ok=True)
 
     latest_archive = find_latest_archive(archives_dir, "compromised")
     url = f"{APICall}{API_KEY2}{MALWARE}"
@@ -1004,7 +1064,7 @@ def fetch_compromised_domains():
     return domains
 
 
-def add_compromised_to_blocklist(compromised):
+def add_compromised_to_blocklist(compromised, when: datetime = None):
     log.info("Adding compromised domains to blocklist")
     blocklist_path = Path("blocklist.txt")
     existing_domains = set()
@@ -1039,23 +1099,52 @@ def add_compromised_to_blocklist(compromised):
     register_created(blocklist_path)
     log.info(f"Blocklist updated with compromised domains. Total domains: {len(combined_domains):,}")
 
-    write_compromised_log(added_entries)
+    write_compromised_log(added_entries, when=when)
     return added_entries, len(combined_domains)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="NRDGuard domain blocklist pipeline")
+    parser.add_argument(
+        "-d", "--date",
+        metavar="MMDDYYYY",
+        help=(
+            "Reprocess an archived feed for this date instead of fetching "
+            "today's feed, e.g. -d 07132026 for 2026-07-13. Reads "
+            "archives/domains_<date>.zip (and compromised_<date>.zip if "
+            "present) instead of hitting the network."
+        ),
+    )
+    return parser.parse_args()
 
 
 def main():
     global RUN_START
     RUN_START = time.time()
-    log.info("=== Unsafe New URL starting ===")
+
+    args = parse_args()
+    target_date = None
+    if args.date:
+        try:
+            target_date = datetime.strptime(args.date, "%m%d%Y")
+        except ValueError:
+            log.error(f"Invalid --date value {args.date!r}; expected MMDDYYYY (e.g. 07132026)")
+            sys.exit(1)
+
+    if target_date is not None:
+        log.info(f"=== Unsafe New URL starting (replaying {target_date:%Y-%m-%d}) ===")
+    else:
+        log.info("=== Unsafe New URL starting ===")
+
     try:
         get_api_key()
-        domains = fetch_domains()
+        domains = fetch_domains(target_date)
         flagged, classify_stats = classify_domains(domains)
-        write_daily_log(flagged)
-        write_category_summary(flagged)
+        write_daily_log(flagged, when=target_date)
+        write_category_summary(flagged, when=target_date)
         blocklist_total = add_to_blocklist(flagged)
-        compromised = fetch_compromised_domains()
-        compromised_added, final_blocklist_total = add_compromised_to_blocklist(compromised)
+        compromised = fetch_compromised_domains(target_date)
+        compromised_added, final_blocklist_total = add_compromised_to_blocklist(compromised, when=target_date)
         write_daily_digest(
             total_domains_scanned=len(domains),
             flagged=flagged,
@@ -1064,6 +1153,7 @@ def main():
             compromised_fetched=len(compromised),
             compromised_added=compromised_added,
             final_blocklist_total=final_blocklist_total,
+            when=target_date,
         )
         hash_blocklist()
         push_to_github()
