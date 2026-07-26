@@ -1121,6 +1121,7 @@ def parse_args():
 def main():
     global RUN_START
     RUN_START = time.time()
+    load_local_env()
 
     args = parse_args()
     target_date = None
