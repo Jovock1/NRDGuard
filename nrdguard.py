@@ -30,6 +30,18 @@ log = logging.getLogger(__name__)
 # Global env variables
 BATCH_SIZE = 500
 
+# Models classified in parallel each run; a domain only lands in the
+# stricter consensus list (blocklist_consensus.txt) if every model here
+# agrees on both the domain and its category. Override via LLAMA_MODELS
+# (comma-separated) in .env.
+DEFAULT_MODELS = ["gemma4:31b-cloud", "qwen3.5:397b-cloud"]
+
+
+def get_configured_models():
+    raw = os.getenv("LLAMA_MODELS", "")
+    models = [m.strip() for m in raw.split(",") if m.strip()]
+    return models or DEFAULT_MODELS
+
 # Real feed archives run ~3-6MB (domains) / ~32MB (compromised) uncompressed;
 # this caps decompression at a generous multiple of that so a
 # compromised/spoofed upstream can't OOM the process with a decompression
@@ -175,7 +187,7 @@ def _extract_text_from_response(data):
     return extracted
 
 
-def generate_with_llama(prompt: str, max_tokens: int = 1000, system_prompt: str = None, response_format=None) -> str:
+def generate_with_llama(prompt: str, max_tokens: int = 1000, system_prompt: str = None, response_format=None, model_name: str = None) -> str:
     """Generate text using the local Ollama chat API.
 
     response_format, when given a JSON schema dict, asks Ollama to constrain
@@ -186,7 +198,7 @@ def generate_with_llama(prompt: str, max_tokens: int = 1000, system_prompt: str 
     """
     load_local_env()
 
-    model_name = os.getenv("LLAMA_MODEL_NAME", "gemma4:12b")
+    model_name = model_name or os.getenv("LLAMA_MODEL_NAME", "gemma4:12b")
     if ollama_chat is not None:
         messages = []
         if system_prompt:
@@ -282,7 +294,7 @@ FLAGGED_DOMAINS_SCHEMA = {
 }
 
 
-def classify_batch(batch):
+def classify_batch(batch, model_name: str = None):
     categories_line = ", ".join(CLASSIFICATION_CATEGORIES)
     system_prompt = (
         "You are a domain name threat classifier. You analyze lists of newly registered domains and flag any that appear in these categories:\n"
@@ -309,6 +321,7 @@ def classify_batch(batch):
         max_tokens=6000,
         system_prompt=system_prompt,
         response_format=FLAGGED_DOMAINS_SCHEMA,
+        model_name=model_name,
     )
 
     batch_domains = {d.strip().lower() for d in batch}
@@ -346,7 +359,7 @@ def classify_batch(batch):
         # anything else is a hallucinated/misremembered domain, not a real
         # classification of the input we sent.
         if domain and category and is_valid_domain(domain) and domain in batch_domains:
-            flagged.append(f"{domain},{category}")
+            flagged.append({"domain": domain, "category": category})
         else:
             rejected += 1
             if first_rejected is None:
@@ -367,12 +380,12 @@ def classify_batch(batch):
 def count_categories(flagged):
     counts = Counter()
     for entry in flagged:
-        _, _, category = entry.partition(",")
-        counts[category.strip()] += 1
+        counts[entry["category"].strip()] += 1
     return counts
 
 
-def classify_domains(domains):
+def classify_domains(domains, model_name: str = None):
+    resolved_model = model_name or os.getenv("LLAMA_MODEL_NAME", "gemma4:12b")
     all_flagged = []
     zero_flag_batches = 0
     total_batches = (len(domains) + BATCH_SIZE - 1) // BATCH_SIZE
@@ -380,17 +393,19 @@ def classify_domains(domains):
     for i in range(0, len(domains), BATCH_SIZE):
         batch = domains[i:i + BATCH_SIZE]
         batch_num = i // BATCH_SIZE + 1
-        flagged = classify_batch(batch)
+        flagged = classify_batch(batch, model_name=resolved_model)
+        for entry in flagged:
+            entry["model"] = resolved_model
         all_flagged.extend(flagged)
         if not flagged:
             zero_flag_batches += 1
-        log.info(f"Batch {batch_num}/{total_batches}: {len(flagged)} flagged")
+        log.info(f"[{resolved_model}] Batch {batch_num}/{total_batches}: {len(flagged)} flagged")
 
-    log.info(f"Total flagged: {len(all_flagged):,}")
+    log.info(f"[{resolved_model}] Total flagged: {len(all_flagged):,}")
 
     category_counts = count_categories(all_flagged)
     if category_counts:
-        log.info("Category breakdown:")
+        log.info(f"[{resolved_model}] Category breakdown:")
         for category, count in category_counts.most_common():
             log.info(f"  {category}: {count:,}")
 
@@ -398,11 +413,11 @@ def classify_domains(domains):
         zero_flag_rate = zero_flag_batches / total_batches
         if zero_flag_rate >= 0.8:
             log.warning(
-                "%d/%d batches (%.0f%%) returned zero flagged domains this run. "
+                "[%s] %d/%d batches (%.0f%%) returned zero flagged domains this run. "
                 "That's unusual for this feed -- treat this as a likely classifier "
                 "failure (truncated responses, bad model config, etc.) rather than "
                 "assuming today's batch was unusually clean, and check the run's logs.",
-                zero_flag_batches, total_batches, zero_flag_rate * 100,
+                resolved_model, zero_flag_batches, total_batches, zero_flag_rate * 100,
             )
 
     stats = {
@@ -411,6 +426,44 @@ def classify_domains(domains):
         "category_counts": category_counts,
     }
     return all_flagged, stats
+
+
+def classify_domains_multi(domains, model_names):
+    """Run classification against every model in model_names over the same
+    domain list.
+
+    Returns:
+      - per_model: {model_name: {"flagged": [...], "stats": {...}}}
+      - all_flagged: every (domain, category, model) row from every model --
+        the union, used for List 1 (blocklist.txt) and the flagged-domains log.
+      - consensus_flagged: only domains where every configured model assigned
+        the *same* category, used for List 2 (blocklist_consensus.txt) to
+        filter out single-model hallucinations.
+    """
+    per_model = {}
+    for model_name in model_names:
+        flagged, stats = classify_domains(domains, model_name=model_name)
+        per_model[model_name] = {"flagged": flagged, "stats": stats}
+
+    all_flagged = [entry for result in per_model.values() for entry in result["flagged"]]
+
+    votes = {}
+    for entry in all_flagged:
+        votes.setdefault(entry["domain"], {}).setdefault(entry["category"], set()).add(entry["model"])
+
+    consensus_flagged = []
+    required = set(model_names)
+    for domain, category_votes in votes.items():
+        for category, models in category_votes.items():
+            if models >= required:
+                consensus_flagged.append({"domain": domain, "category": category, "models": sorted(models)})
+
+    log.info(
+        f"Consensus: {len(consensus_flagged):,} domains agreed on by all {len(model_names)} model(s), "
+        f"out of {len({e['domain'] for e in all_flagged}):,} flagged by at least one."
+    )
+
+    return per_model, all_flagged, consensus_flagged
 
 
 def logs_subdir(name):
@@ -438,29 +491,18 @@ def write_daily_log(flagged, when: datetime = None):
     csv_path = make_unique_timestamped_path(logs_subdir("csv"), "flagged_domains", "csv", now)
     json_path = make_unique_timestamped_path(logs_subdir("json"), "flagged_domains", "json", now)
 
-    parsed_entries = []
-    for entry in flagged:
-        parts = [p.strip() for p in entry.split(",")]
-        if len(parts) >= 2:
-            domain, classification = parts[0], parts[1]
-        else:
-            domain, classification = entry, "unknown"
-        parsed_entries.append({
-            "domain": domain,
-            "classification": classification,
-        })
-
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["domain", "classification"])
+        writer = csv.DictWriter(handle, fieldnames=["domain", "classification", "model"])
         writer.writeheader()
-        for entry in parsed_entries:
+        for entry in flagged:
             writer.writerow({
                 "domain": entry["domain"],
-                "classification": sanitize_csv_field(entry["classification"]),
+                "classification": sanitize_csv_field(entry["category"]),
+                "model": sanitize_csv_field(entry.get("model", "")),
             })
 
     with json_path.open("w", encoding="utf-8") as handle:
-        json.dump(parsed_entries, handle, indent=2)
+        json.dump(flagged, handle, indent=2)
         handle.write("\n")
 
     register_created(csv_path)
@@ -522,47 +564,60 @@ def write_compromised_log(entries, when: datetime = None):
 
 def write_daily_digest(
     total_domains_scanned,
-    flagged,
-    classify_stats,
-    blocklist_total_after_classification,
+    per_model,
+    all_flagged,
+    consensus_flagged,
+    list1_total_after_classification,
+    list2_total_after_classification,
     compromised_fetched,
     compromised_added,
-    final_blocklist_total,
+    list1_final_total,
+    list2_final_total,
     when: datetime = None,
 ):
     now = when or datetime.now()
     digest_path = make_unique_timestamped_path(logs_subdir("daily_summary"), "daily_summary", "md", now)
 
-    category_counts = classify_stats["category_counts"]
-    total_batches = classify_stats["total_batches"]
-    zero_flag_batches = classify_stats["zero_flag_batches"]
+    union_domain_count = len({entry["domain"] for entry in all_flagged})
 
     lines = [
         f"# NRDGuard Daily Summary -- {now.strftime('%Y-%m-%d')}",
         "",
         "## Domains Scanned",
         f"- Total domains fetched: {total_domains_scanned:,}",
-        f"- Batches processed: {total_batches:,} ({zero_flag_batches:,} returned zero flagged domains)",
         "",
-        "## Classification Results",
-        f"- Total flagged: {len(flagged):,}",
-        f"- Blocklist total after classification: {blocklist_total_after_classification:,}",
-        "",
-        "### Category Breakdown",
-        "| Category | Count |",
-        "|---|---|",
+        "## Classification Results by Model",
     ]
-    for category, count in category_counts.most_common():
-        lines.append(f"| {category} | {count:,} |")
+    for model_name, result in per_model.items():
+        stats = result["stats"]
+        lines += [
+            f"### {model_name}",
+            f"- Batches processed: {stats['total_batches']:,} ({stats['zero_flag_batches']:,} returned zero flagged domains)",
+            f"- Total flagged: {len(result['flagged']):,}",
+            "",
+            "| Category | Count |",
+            "|---|---|",
+        ]
+        for category, count in stats["category_counts"].most_common():
+            lines.append(f"| {category} | {count:,} |")
+        lines.append("")
 
     lines += [
+        "## Model Agreement",
+        f"- Domains flagged by at least one model: {union_domain_count:,}",
+        f"- Domains every model agreed on (domain + category): {len(consensus_flagged):,}",
         "",
         "## Compromised Domains Feed",
         f"- Domains fetched: {compromised_fetched:,}",
-        f"- Newly added to blocklist: {len(compromised_added):,}",
+        f"- Newly added: {len(compromised_added):,}",
         "",
-        "## Final Blocklist Size",
-        f"- {final_blocklist_total:,} domains",
+        "## List 1 -- blocklist.txt (union of all models + compromised)",
+        f"- After classification: {list1_total_after_classification:,} domains",
+        f"- Final: {list1_final_total:,} domains",
+        "",
+        "## List 2 -- blocklist_consensus.txt (model agreement + compromised)",
+        f"- After classification: {list2_total_after_classification:,} domains",
+        f"- Final: {list2_final_total:,} domains",
         "",
     ]
 
@@ -706,6 +761,7 @@ def hash_blocklist():
 def push_to_github():
     repo_dir = Path(__file__).resolve().parent
     blocklist_path = repo_dir / "blocklist.txt"
+    consensus_blocklist_path = repo_dir / "blocklist_consensus.txt"
     logs_dir = repo_dir / "logs"
     # Only include .sha256 files that were created during this run
     sha_files = []
@@ -727,10 +783,16 @@ def push_to_github():
         except Exception:
             continue
 
-    # try to enable Git LFS and track the blocklist to avoid pushing >25MB files
+    # try to enable Git LFS and track both blocklists to avoid pushing >25MB files
     try:
         subprocess.run(["git", "-C", str(repo_dir), "lfs", "install"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         subprocess.run(["git", "-C", str(repo_dir), "lfs", "track", "blocklist.txt"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(["git", "-C", str(repo_dir), "lfs", "track", "blocklist_consensus.txt"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # `git lfs track` rewrites .gitattributes on disk but nothing else
+        # registers that change, so without this it silently never gets
+        # committed and LFS tracking for new patterns never actually takes
+        # effect on the remote.
+        register_created(repo_dir / ".gitattributes")
     except subprocess.CalledProcessError as exc:
         log.warning("git lfs setup failed or not available: %s", exc)
 
@@ -773,13 +835,18 @@ def push_to_github():
         if p.exists() and p not in files_to_add:
             files_to_add.append(p)
 
-    # Always include blocklist.txt and its hash if present (primary artifact)
+    # Always include both blocklists and their hashes if present (primary artifacts)
     try:
         if blocklist_path.exists() and blocklist_path.resolve() not in files_to_add:
             files_to_add.insert(0, blocklist_path)
         blocklist_sha = repo_dir / (blocklist_path.name + ".sha256")
         if blocklist_sha.exists() and blocklist_sha.resolve() not in files_to_add:
             files_to_add.insert(1, blocklist_sha)
+        if consensus_blocklist_path.exists() and consensus_blocklist_path.resolve() not in files_to_add:
+            files_to_add.append(consensus_blocklist_path)
+        consensus_sha = repo_dir / (consensus_blocklist_path.name + ".sha256")
+        if consensus_sha.exists() and consensus_sha.resolve() not in files_to_add:
+            files_to_add.append(consensus_sha)
     except Exception:
         pass
 
@@ -976,9 +1043,9 @@ def fetch_domains(for_date: datetime = None):
     return domains
 
 
-def add_to_blocklist(flagged):
-    log.info("Adding flagged domains to blocklist")
-    blocklist_path = Path("blocklist.txt")
+def add_to_blocklist(flagged, blocklist_path: Path = None):
+    blocklist_path = blocklist_path or Path("blocklist.txt")
+    log.info(f"Adding flagged domains to {blocklist_path}")
     existing_domains = set()
     if blocklist_path.exists():
         with blocklist_path.open("r", encoding="utf-8") as handle:
@@ -987,13 +1054,7 @@ def add_to_blocklist(flagged):
                 if is_valid_domain(cleaned):
                     existing_domains.add(cleaned)
 
-    new_domains = set()
-    for entry in flagged:
-        if not entry:
-            continue
-        domain = entry.split(",")[0].strip().lower()
-        if is_valid_domain(domain):
-            new_domains.add(domain)
+    new_domains = {entry["domain"] for entry in flagged if is_valid_domain(entry["domain"])}
 
     combined_domains = existing_domains.union(new_domains)
 
@@ -1002,7 +1063,7 @@ def add_to_blocklist(flagged):
             handle.write(f"{domain}\n")
 
     register_created(blocklist_path)
-    log.info(f"Blocklist updated. Total domains: {len(combined_domains):,}")
+    log.info(f"{blocklist_path} updated. Total domains: {len(combined_domains):,}")
     return len(combined_domains)
 
 
@@ -1064,9 +1125,9 @@ def fetch_compromised_domains(for_date: datetime = None):
     return domains
 
 
-def add_compromised_to_blocklist(compromised, when: datetime = None):
-    log.info("Adding compromised domains to blocklist")
-    blocklist_path = Path("blocklist.txt")
+def add_compromised_to_blocklist(compromised, blocklist_path: Path = None, when: datetime = None, write_log: bool = True):
+    blocklist_path = blocklist_path or Path("blocklist.txt")
+    log.info(f"Adding compromised domains to {blocklist_path}")
     existing_domains = set()
     if blocklist_path.exists():
         with blocklist_path.open("r", encoding="utf-8") as handle:
@@ -1097,9 +1158,10 @@ def add_compromised_to_blocklist(compromised, when: datetime = None):
             handle.write(f"{domain}\n")
 
     register_created(blocklist_path)
-    log.info(f"Blocklist updated with compromised domains. Total domains: {len(combined_domains):,}")
+    log.info(f"{blocklist_path} updated with compromised domains. Total domains: {len(combined_domains):,}")
 
-    write_compromised_log(added_entries, when=when)
+    if write_log:
+        write_compromised_log(added_entries, when=when)
     return added_entries, len(combined_domains)
 
 
@@ -1132,28 +1194,47 @@ def main():
             log.error(f"Invalid --date value {args.date!r}; expected MMDDYYYY (e.g. 07132026)")
             sys.exit(1)
 
+    models = get_configured_models()
+
     if target_date is not None:
-        log.info(f"=== Unsafe New URL starting (replaying {target_date:%Y-%m-%d}) ===")
+        log.info(f"=== Unsafe New URL starting (replaying {target_date:%Y-%m-%d}) === models={models}")
     else:
-        log.info("=== Unsafe New URL starting ===")
+        log.info(f"=== Unsafe New URL starting === models={models}")
 
     try:
         get_api_key()
         domains = fetch_domains(target_date)
-        flagged, classify_stats = classify_domains(domains)
-        write_daily_log(flagged, when=target_date)
-        write_category_summary(flagged, when=target_date)
-        blocklist_total = add_to_blocklist(flagged)
+
+        per_model, all_flagged, consensus_flagged = classify_domains_multi(domains, models)
+
+        write_daily_log(all_flagged, when=target_date)
+        write_category_summary(all_flagged, when=target_date)
+
+        list1_path = Path("blocklist.txt")
+        list2_path = Path("blocklist_consensus.txt")
+
+        list1_total_after_classify = add_to_blocklist(all_flagged, blocklist_path=list1_path)
+        list2_total_after_classify = add_to_blocklist(consensus_flagged, blocklist_path=list2_path)
+
         compromised = fetch_compromised_domains(target_date)
-        compromised_added, final_blocklist_total = add_compromised_to_blocklist(compromised, when=target_date)
+        compromised_added, list1_final_total = add_compromised_to_blocklist(
+            compromised, blocklist_path=list1_path, when=target_date, write_log=True,
+        )
+        _, list2_final_total = add_compromised_to_blocklist(
+            compromised, blocklist_path=list2_path, when=target_date, write_log=False,
+        )
+
         write_daily_digest(
             total_domains_scanned=len(domains),
-            flagged=flagged,
-            classify_stats=classify_stats,
-            blocklist_total_after_classification=blocklist_total,
+            per_model=per_model,
+            all_flagged=all_flagged,
+            consensus_flagged=consensus_flagged,
+            list1_total_after_classification=list1_total_after_classify,
+            list2_total_after_classification=list2_total_after_classify,
             compromised_fetched=len(compromised),
             compromised_added=compromised_added,
-            final_blocklist_total=final_blocklist_total,
+            list1_final_total=list1_final_total,
+            list2_final_total=list2_final_total,
             when=target_date,
         )
         hash_blocklist()

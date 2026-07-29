@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Runs nrdguard.py with the correct interpreter (.venv, which has the
 # `ollama` package that the system python3 lacks) and a lock so a slow
-# run (LLM classification over ~600 batches) can't overlap with the next
-# scheduled one.
+# run (LLM classification over ~600 batches, once per configured model)
+# can't overlap with the next scheduled one.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
