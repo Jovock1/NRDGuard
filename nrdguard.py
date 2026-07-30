@@ -388,12 +388,23 @@ def classify_domains(domains, model_name: str = None):
     resolved_model = model_name or os.getenv("LLAMA_MODEL_NAME", "gemma4:12b")
     all_flagged = []
     zero_flag_batches = 0
+    failed_batches = 0
     total_batches = (len(domains) + BATCH_SIZE - 1) // BATCH_SIZE
 
     for i in range(0, len(domains), BATCH_SIZE):
         batch = domains[i:i + BATCH_SIZE]
         batch_num = i // BATCH_SIZE + 1
-        flagged = classify_batch(batch, model_name=resolved_model)
+        try:
+            flagged = classify_batch(batch, model_name=resolved_model)
+        except Exception as e:
+            # A batch that fails every retry (e.g. a cloud backend having a
+            # bad day on one model) shouldn't take down the whole run --
+            # especially now that a second model's already-completed work
+            # would otherwise be thrown away with it. Skip it, count it, and
+            # keep going; the run still completes and pushes what it got.
+            failed_batches += 1
+            flagged = []
+            log.warning(f"[{resolved_model}] Batch {batch_num}/{total_batches} failed, skipping: {e}")
         for entry in flagged:
             entry["model"] = resolved_model
         all_flagged.extend(flagged)
@@ -402,6 +413,8 @@ def classify_domains(domains, model_name: str = None):
         log.info(f"[{resolved_model}] Batch {batch_num}/{total_batches}: {len(flagged)} flagged")
 
     log.info(f"[{resolved_model}] Total flagged: {len(all_flagged):,}")
+    if failed_batches:
+        log.warning(f"[{resolved_model}] {failed_batches}/{total_batches} batches failed and were skipped.")
 
     category_counts = count_categories(all_flagged)
     if category_counts:
@@ -423,6 +436,7 @@ def classify_domains(domains, model_name: str = None):
     stats = {
         "total_batches": total_batches,
         "zero_flag_batches": zero_flag_batches,
+        "failed_batches": failed_batches,
         "category_counts": category_counts,
     }
     return all_flagged, stats
@@ -592,7 +606,7 @@ def write_daily_digest(
         stats = result["stats"]
         lines += [
             f"### {model_name}",
-            f"- Batches processed: {stats['total_batches']:,} ({stats['zero_flag_batches']:,} returned zero flagged domains)",
+            f"- Batches processed: {stats['total_batches']:,} ({stats['zero_flag_batches']:,} returned zero flagged domains, {stats.get('failed_batches', 0):,} failed and were skipped)",
             f"- Total flagged: {len(result['flagged']):,}",
             "",
             "| Category | Count |",
