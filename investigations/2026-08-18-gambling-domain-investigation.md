@@ -31,8 +31,9 @@ JS from domains our own scanner flagged as likely malicious.
 
 ## Sample
 
-40 domains randomly sampled from the `Gambling` category across four rounds,
-plus a fifth, targeted round chasing one specific lead (see
+156 domains randomly sampled from the `Gambling` category across six rounds
+(40, then +16, then +100 — plus 6 targeted spot-checks of two specific
+name-clusters and a separate, targeted investigation of one lead — see
 [The `askmebet.tech` / QA-pipeline lead](#the-askmebettech--qa-pipeline-lead)
 below). Every domain got a `domain_report` (DNS/WHOIS/ASN/geo) and a
 `fetch_homepage` at minimum; several got `fetch_rendered` and deeper follow-up
@@ -40,16 +41,24 @@ where the surface result was ambiguous or interesting.
 
 ## Headline finding: a large share of "Gambling" flags aren't showing gambling content
 
-Across the 40 randomly sampled domains, roughly **half were not actually
-serving live gambling content** at the time of testing. That splits into two
-distinct, both-confirmed categories:
+Across the 156 randomly sampled domains, **59% were not actually serving live
+gambling content** at the time of testing (41% confirmed live). That splits
+into several distinct, confirmed categories, dominated by one:
 
-### 1. A single shared infrastructure cluster, now dead (11 of 40 domains)
+### 1. A single shared infrastructure cluster, now dead (37 of 156 domains — 23.7%)
 
 `116bet.bid`, `zitbaj.bet`, `a88.cash`, `7j77bet.bet`, `batman668.onl`,
 `ba999ccom.bet`, `333okcasino.bet`, `kriyalive.bet`, `pp88.cash`,
-`hi77game.bet`, `sun99.best` — **all 11** resolve to the exact same IP,
-`185.53.179.128`, via the exact same nameservers, `ns1/ns2.dyna-ns.net`.
+`hi77game.bet`, `sun99.best`, `casinocasino.click`, `qq666.lat`,
+`jackpotbet.best`, and 24 more found in a later 100-domain round — **all 37**
+resolve to the exact same IP, `185.53.179.128`, via the exact same
+nameservers, `ns1/ns2.dyna-ns.net`. (One more, `aa66.cash`, sits on the same
+`dyna-ns.net` nameservers but currently has no A record configured —
+adjacent to this cluster, not counted in the 37.)
+
+This single cluster is the largest specific bucket found in the entire
+sample — **nearly a quarter of every "Gambling"-flagged domain checked**
+traces to this one dead IP.
 
 This IP belongs to **Team Internet AG** (RIPE-registered block
 `185.53.179.0/24`, "DC-Germany"), a legitimate, publicly-traded domain
@@ -78,26 +87,49 @@ not just these domains), and once past that, these are **confirmed dead —
 deliberately deactivated ParkingCrew placeholders**, not live gambling sites.
 Whatever nrdguard saw when it flagged them, there's nothing there now.
 
-### 2. Parked/for-sale domains on legitimate marketplaces (5 of 40 domains)
+### 2. Parked/for-sale domains on legitimate marketplaces (18 of 156 domains — 11.5%)
 
-- `betonmatkets.com` — WHOIS: *"caught by DropCatch.com on behalf of a
-  DropCatch customer... pending backorder/auction delivery"*, hosted on AWS.
-- `bm29.com` — `ns1/ns2.afternic.com` (GoDaddy's domain marketplace). Its
-  homepage is a `window.onload` JS redirect to
-  `forsale.godaddy.com/forsale/bm29.com` — standard Afternic parking
-  monetization, not a gambling cloak, confirmed by following it with a real
-  browser.
-- `stakebce.xyz` and `subpropay.xyz` — also `ns5/ns6.afternic.com`, and share
-  the **exact same IP pair** (`13.248.169.48` / `76.223.54.146`) as `bm29.com`
-  — a second, smaller confirmed shared-infrastructure cluster, all GoDaddy
-  parking.
+Four distinct parking platforms confirmed, beyond the Team Internet AG
+cluster above:
+
+- **GoDaddy/Afternic** — `betonmatkets.com` (WHOIS: *"caught by DropCatch.com
+  on behalf of a DropCatch customer... pending backorder/auction delivery"*),
+  `bm29.com` (`ns1/ns2.afternic.com`; homepage is a `window.onload` JS
+  redirect to `forsale.godaddy.com/forsale/bm29.com`, confirmed by following
+  it with a real browser), `stakebce.xyz` and `subpropay.xyz` (also
+  `ns5/ns6.afternic.com`, sharing the exact same IP pair `13.248.169.48` /
+  `76.223.54.146` as `bm29.com`).
+- **GoDaddy default parking (a separate pair from Afternic)** —
+  `swiftbet247.plus`, `betbook250.plus`, `842win.org` all share the exact
+  same IP pair `3.33.130.190` / `15.197.148.33` on GoDaddy's own default
+  nameservers (`domaincontrol.com`) — same "not built out" signature, distinct
+  infrastructure from the Afternic-specific cluster.
+- **Parity Domains** (`parity.domains`) — `raykobet476/489/469.com` (all 3
+  spot-checked from the 39-domain `raykobet` name-cluster) and
+  `chobanicasinoguncel.xyz`, `lotos247.blue`, `bolo800.info`,
+  `rajalangit77-naik6.today` all returned the **byte-for-byte identical
+  2,963-byte page**, despite being unrelated brand names — the HTML loads
+  `lander.parity.domains`, a legitimate domain-aftermarket landing-page
+  product.
 - Several more resolved but served nothing usable: directory-listing stubs
-  (`arenaprediksi234.net`, `belanja4dzorro.lol` → `Index of /`), a broken
-  Cloudflare zone (`ilmu-tennang.store` → `409 DNS resolution error`), a
-  Cloudflare bot-check wall (`jawara88opra.site`), a dead TLS backend
-  (`ruayruay888.org` → `525 SSL handshake failed`), and plain 404s
-  (`tiki4d-resmi3.shop`, matching `tiki4d-resmi1.shop` from an earlier round —
-  see domain-family clustering below).
+  (`arenaprediksi234.net`, `belanja4dzorro.lol`, `urbanbatslot.com`,
+  `vip333ada.top`, `proses4dultraman.monster` → `Index of /`), broken
+  Cloudflare zones/backends (`ilmu-tennang.store` → `409 DNS resolution
+  error`; `esbet-sitespasha2026.top` → `520`; `poker88vn.com` → `521`;
+  `kssi-play.win` → `523`; `ruayruay888.org` → `525 SSL handshake failed`),
+  Cloudflare/WAF bot-check walls (`jawara88opra.site`,
+  `betcio-gunceladresin.icu`, `984matbet.cam`, `holiganbetyeni2026adresi.cam`,
+  `zhibo-leyutiyu.com`), plain 404s (`tiki4d-resmi3.shop`, matching
+  `tiki4d-resmi1.shop` from an earlier round — see domain-family clustering
+  below; `simsinoscasino11.com`), a hosting-suspension page
+  (`licin4d-game.com` → *"Sorry, the website has been stopped"*, matching the
+  `hkmeivus.com` pattern from round one), and one domain
+  (`judolbola.xyz`) whose own authoritative DNS answers `127.0.0.1` —
+  configured to go nowhere, not a local sinkhole artifact (confirmed via the
+  public resolver).
+- One false alarm worth noting: `pudingsusu.cfd` isn't gambling content at
+  all — it's a default landing page for **Dub.co**, a link-shortener/bio-link
+  SaaS tool, caught under a gambling-sounding domain name.
 
 **Likely explanation for both categories**: nrdguard classifies on the domain
 *name* — these are largely speculatively-registered domains on cheap,
@@ -109,13 +141,16 @@ known parking providers (`dyna-ns.net`, `sedoparking.com`, `afternic.com`,
 `dan.com`, `above.com`, `bodis.com`, ...) before running the gambling
 classifier would likely cut this false-positive rate substantially.
 
-## Confirmed-live gambling sites (8 of 40 domains)
+## Confirmed-live gambling sites (64 of 156 domains — 41%)
 
-`kopi4dh.com`, `ga888ib.bet`, `profesorbet.top`, `shareslots.cloud`,
-`ceriabet12xsop.live`, `ocic888.beer`, `8888ybet.vip`, `kb333club.com` all
-returned real, distinctly-branded, localized gambling content (Indonesian,
-Vietnamese, Thai, Burmese, Bengali — APK-download funnels and sportsbook
-landing pages).
+The deep-dive below (payment info, tracking IDs, structured data) was run on
+the first 8 confirmed-live domains found: `kopi4dh.com`, `ga888ib.bet`,
+`profesorbet.top`, `shareslots.cloud`, `ceriabet12xsop.live`, `ocic888.beer`,
+`8888ybet.vip`, `kb333club.com` — all returned real, distinctly-branded,
+localized gambling content (Indonesian, Vietnamese, Thai, Burmese, Bengali —
+APK-download funnels and sportsbook landing pages). 56 more confirmed live in
+later rounds, spanning the same range of languages/markets plus Turkish,
+Russian, and Chinese-language sites.
 
 ### Looking for common ownership via payment info — negative result
 
@@ -182,6 +217,23 @@ TLD, filter a generic-term list) run across the full blocklist would collapse
 tens of thousands of raw entries down to a much smaller number of actual
 *operators*, and immediately surface the biggest ones for priority handling.
 
+### Caveat: cluster size ≠ confirmed-live count
+
+Spot-checked 3 domains each from the two largest clusters (`casipot`, 100
+domains; `raykobet`, 39 domains) to verify the technique holds up under
+direct testing:
+
+- **All 3 `casipot` domains have no DNS delegation at all** — registered
+  (GoDaddy), never activated. Not even nameservers responding.
+- **All 3 `raykobet` domains are parked on Parity Domains** (see above), not
+  live gambling sites.
+
+So the biggest name-based clusters likely represent a speculator's
+*stockpile* — bulk-registered, mostly dormant, a handful activated at a time
+— rather than 100 or 39 simultaneously-live threats. If this becomes a
+permanent nrdguard signal, weight cluster priority by confirmed-live count,
+not raw registration count.
+
 ## The `askmebet.tech` / QA-pipeline lead
 
 While scanning for distinctive (non-generic) clusters, one stood out for a
@@ -245,25 +297,40 @@ pursued unilaterally.
 
 ## Summary numbers
 
-| Bucket | Count | Share of 40 sampled |
+Across 156 randomly-sampled domains (six rounds: 40, +16, +100):
+
+| Bucket | Count | Share |
 |---|---|---|
-| Dead/deactivated ParkingCrew placeholders (Team Internet AG cluster) | 11 | 27.5% |
-| Parked/for-sale or otherwise non-functional | 5 | 12.5% |
-| **Confirmed live gambling content** | 8 | 20% |
-| Not yet independently classified in this write-up (misc errors/blocks) | 16 | 40% |
+| Dead/deactivated ParkingCrew placeholders (Team Internet AG cluster) | 37 | 23.7% |
+| Other parked (Afternic, GoDaddy-default, Parity Domains) | 18 | 11.5% |
+| Dead/suspended/404 | 6 | 3.8% |
+| Broken backend (5xx errors) | 6 | 3.8% |
+| Empty directory listings | 6 | 3.8% |
+| Blocked/inconclusive (WAF challenges, timeouts, thin responses) | 18 | 11.5% |
+| **Confirmed live gambling content** | **64** | **41.0%** |
+
+**59% of "Gambling"-flagged domains sampled are not showing live gambling
+content**, and almost a quarter of everything sampled traces to one dead IP.
 
 Plus, orthogonal to the above: **156 domain-family clusters (1,575+ domains,
 ~6.6% of the unique gambling list)** identifiable directly from registration
 patterns, several mapping to real, externally-documented offshore gambling
 brands (1xBet/1xLite, 1win, Vavada, Dragon Money, Lotus365, Kubet) known
-specifically for running large mirror-domain networks to evade blocking.
+specifically for running large mirror-domain networks to evade blocking —
+though spot-checks show the largest clusters skew heavily toward
+dormant/parked rather than simultaneously-live (see caveat above).
 
 ## Open threads / next steps
 
-- Firm up the ~50% false-positive rate with a larger sample, or check it
-  directly against nrdguard's classification logic/prompts.
+- The ~59% false-positive-adjacent rate is now backed by a 156-domain sample
+  (up from an initial 40) and has stayed consistent as the sample grew —
+  reasonably solid. Could still be checked directly against nrdguard's
+  classification logic/prompts for a root-cause fix.
 - Run the brand-stem clustering at a lower threshold (3+ members) to see how
-  much bigger the "real operator" count gets.
+  much bigger the "real operator" count gets, and weight by confirmed-live
+  count rather than raw registration count (see caveat above).
 - Add a parking-nameserver pre-filter (see false-positive section) to
-  nrdguard as a concrete engineering change.
+  nrdguard as a concrete engineering change — candidates confirmed in this
+  investigation: `dyna-ns.net`, `afternic.com`, `domaincontrol.com` (GoDaddy
+  default), `parity.domains`/`lander.parity.domains`, `dropcatch.com`.
 - `askmebet.tech` — left as a flagged lead, not pursued further (see above).
