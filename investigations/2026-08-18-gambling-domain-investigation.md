@@ -33,9 +33,9 @@ JS from domains our own scanner flagged as likely malicious.
 
 156 domains randomly sampled from the `Gambling` category across six rounds
 (40, then +16, then +100 — plus 6 targeted spot-checks of two specific
-name-clusters and a separate, targeted investigation of one lead — see
-[The `askmebet.tech` / QA-pipeline lead](#the-askmebettech--qa-pipeline-lead)
-below). Every domain got a `domain_report` (DNS/WHOIS/ASN/geo) and a
+name-clusters), plus two separate deep-dive case studies chasing specific
+operators to ground: **AskMeBet** and **UFA/UFABET** (see below). Every
+sampled domain got a `domain_report` (DNS/WHOIS/ASN/geo) and a
 `fetch_homepage` at minimum; several got `fetch_rendered` and deeper follow-up
 where the surface result was ambiguous or interesting.
 
@@ -234,7 +234,9 @@ So the biggest name-based clusters likely represent a speculator's
 permanent nrdguard signal, weight cluster priority by confirmed-live count,
 not raw registration count.
 
-## The `askmebet.tech` / QA-pipeline lead
+## Case study: AskMeBet
+
+### The `askmebet.tech` / QA-pipeline lead
 
 While scanning for distinctive (non-generic) clusters, one stood out for a
 different reason — not a consumer brand, but what looks like **internal
@@ -277,23 +279,199 @@ investigation, it's a fundamentally different profile:
   — this is a different, more deliberate access-control mechanism (likely an
   IP allowlist or bot-management rule), not simple IP-reputation filtering.
 
-**Read**: this is very likely the internal QA/staging footprint of whoever
-builds or operates under the "AskMeBet" name — a real engineering team
-(professional CI/CD test-domain provisioning, Cloudflare-registered anchor
-domain), based in or operating out of Thailand, testing betting-platform
-wagering-requirement logic. It reads as deliberately kept off the public
-internet.
-
-**Decision point**: stopped here rather than pushing further. The consumer
+**Decision point**: stopped trying to get past the block. The consumer
 gambling storefronts in this investigation are public-facing by design —
 broadly advertised to attract players, fair game for open recon.
-`askmebet.tech` is the opposite: never indexed, and now confirmed to be
-actively rejecting outside access regardless of source IP or client
-sophistication. Continuing to engineer around that access control (e.g.
-patching around Cloudflare's bot detection specifically) would cross from
+`askmebet.tech` is the opposite: never indexed, and confirmed to actively
+reject outside access regardless of source IP or client sophistication.
+Continuing to engineer around that access control would cross from
 "investigating a public site" into "working around access controls on a
 private system" — a different category of action, flagged rather than
 pursued unilaterally.
+
+### Finding the public-facing brand
+
+"AskMeBet" turns out to be a real, independently-documented online casino/
+betting brand — confirmed via ordinary web search, not by touching
+`askmebet.tech` again. Two live, fully public sites were found and verified:
+
+| Domain | What it is | Notes |
+|---|---|---|
+| `askmebet8.com` | "AskMeBet Pokies \| Richgroup Partnership" — Australia-focused pokies site branded "AskMePlay Gaming" | Live, 200 OK, no blocking |
+| `askmebettournament.com` | "Askmebet Tournament" — a Nuxt.js web app | Live, 200 OK, **shares the exact same Cloudflare nameserver pair** (`cloe`/`norman.ns.cloudflare.com`) as `askmebet.tech` and the `tiamut` test domains — direct infrastructure confirmation, not just a name match. Also registered via Amazon Registrar, same as the QA-pipeline domains. |
+
+**Casino.guru** (independent casino-review aggregator) has a review of
+"AskMeBet Casino" — **Low Safety Index**, recommends against playing there.
+
+### The license claim is fabricated
+
+`askmebet8.com` displays a Curacao gaming license badge: "License: 8048/JAZ"
+(Antillephone N.V.'s master license number). Checked directly against
+**Antillephone's own official validator**
+(`validator.antillephone.com/validate/?domain=askmebet8.com`):
+
+> *"Antillephone cannot verify the licensing status of askmebet8.com...
+> Operating status: **INVALID**."*
+
+The license badge is fabricated, not backed by a real sublicense — consistent
+with the Casino.guru safety rating.
+
+### Business model: a white-label platform, not a single operator
+
+Wayback Machine snapshots of two now-dead regional marketing sites
+(`askmebetkhm.com`, `askmebetkh.com` — both currently have no DNS at all)
+contained a structural admission that reframes the whole investigation:
+
+> *"Although **ASKMEBET is a platform provider**, some of its **licensed
+> Cambodian operators** offer: complete interfaces in the Khmer language,
+> customer support in Khmer, banking in Cambodian riel."*
+>
+> *"ASKMEBET does not issue bonuses directly, **partner casinos do**."* /
+> *"casino sites **powered by ASKMEBET**."*
+
+**AskMeBet is a B2B white-label gambling platform/aggregator, not a single
+retail brand.** The actual retail operators — the entities that would need a
+license, hold player funds, and legally exist (or not) — are separate
+companies plugged into AskMeBet's backend. This directly explains the QA
+infrastructure found above (`test-rollover-single`, testing wagering logic
+that any downstream operator's storefront would need) and why no single
+"AskMeBet" corporate entity could ever be found — there may not be one to
+find; there's a platform vendor, and an unknown number of separate operators
+running on top of it.
+
+The same snapshots also contain evidence of genuine Cambodia operations, not
+fabricated ones: real Cambodian banking rails named specifically ("deposits
+via ABA, Wing etc." — both real, major Cambodian banks/e-wallets), a
+Telegram-first contact model, and real third-party game studios aggregated
+(PG Soft, Spadegaming, JILI, Pragmatic Play, EvoPlay, Live22).
+
+### Is the Cambodia/Thailand link a misdirect?
+
+Worth weighing directly, since a single WHOIS field is thin evidence on its
+own. Arguing against deliberate misdirection: the Bangkok leak surfaced on a
+**private domain that was never meant to be found** (`askmebet.tech` has zero
+Wayback history and isn't linked from anywhere public) — decoys are placed
+somewhere an investigator is expected to look, not buried in a redacted field
+nobody was supposed to see. It's also corroborated by real banking
+integration (ABA/Wing) that would be pointless to fabricate. Cambodia banned
+online gambling entirely from January 2020 (Directive No. 07, August 2019 —
+no new licenses issued, existing ones not renewed), and Thailand has no legal
+path to a private online-gambling license either, so neither country can host
+a *legitimately registered* operator regardless. Most likely read: the
+Thailand/Cambodia signal describes genuine **operational geography** (where
+a dev/ops team or contractor sits) rather than **beneficial ownership** —
+those are commonly and deliberately different in this kind of structure.
+
+### The propaganda article
+
+A user-supplied article, [dutable.com: "Askmebet is Not a Pyramid Scheme –
+Guaranteed Real Payouts"](https://dutable.com/askmebet-is-not-a-pyramid-scheme-guaranteed-real-payouts/),
+turned out to be a paid placement rather than journalism — `dutable.com` is a
+generic multi-topic content mill (same profile as the `siit.co` guest-post
+site used earlier for a similar AskMeBet placement), byline "Spero Agancy"
+[sic] doesn't match any real agency. But it leaked real information while
+attacking a named rival:
+
+- Repeatedly disparages **"UFA"** by name as an inferior, "unclear," unlicensed
+  competitor — see the UFA/UFABET case study below.
+- Names sub-brands under one wallet system: `Askmeslot`, `Askmelotto`,
+  `Askmeplay` (none appear in nrdguard's own blocklist).
+- Claims **"over 10,000 verified partner websites"** — self-reported and
+  unverifiable, but if even roughly true, a striking validation of the
+  domain-family-clustering theory above at a much larger scale than anything
+  found directly in this sample.
+- Reiterates the same fabricated license set (Curacao, Malta Gaming, GLI,
+  BBM Testlabs) — and misrepresents GLI/BBM Testlabs specifically, which are
+  game-testing/certification labs, not gambling regulators.
+
+### Corporate registry search — dead end, and why
+
+Checked Curaçao's Chamber of Commerce (KVK), Hong Kong's Companies Registry,
+and general company databases for any entity named "AskMeBet." None of these
+registries are self-service public databases reachable by a simple query —
+Curaçao's "search" is a request-a-search page with no live form; Hong Kong's
+is a paid, session-based government portal. No entity found anywhere. Given
+the fabricated license and fully-redacted WHOIS on every related domain, this
+is consistent with — not contradicted by — deliberate structuring to avoid
+exactly this kind of lookup.
+
+## Case study: UFA / UFABET
+
+The named rival from the propaganda article turned out to have a completely
+different, much better documented paper trail than AskMeBet.
+
+### Infrastructure sweep
+
+Unlike AskMeBet (zero `askme`-branded domains ever appeared in nrdguard's own
+data — found entirely via external search), **UFA/UFABET already has a real
+footprint in nrdguard's blocklist**: 20 domains matching `ufabet*`/`ufa1*`/
+`ufa2*`. Ran the same DNS + HTML sweep used throughout this investigation:
+
+- **10 of 20 (exactly half) are dormant** on the same GoDaddy default-parking
+  IP pair (`3.33.130.190`/`15.197.148.33`) already identified earlier in the
+  random sample — `1234ufabet.com`, `ufa123.casino`, `ufa1234.bet/.club/.fun
+  /.games/.plus/.win`, `ufabet1234.bet/.com`.
+- `ufa289n.store` sits on Hostinger's `dns-parking.com` — the same parking
+  nameserver found under `profesorbet.top` in an earlier round.
+- `ufabetsites.com` has fully expired — it now redirects straight to its own
+  listing on **ExpiredDomains.com**.
+- Two domains (`ufa222x.org`, `ufabet236-th.xyz`) sit behind an active
+  bot-challenge product (`sgcaptcha`).
+- **A confirmed-live mirror cluster**: `ufabet-bangla.net`, `ufabet-jit.net`,
+  `ufabet-win.com` share the same nameservers (`amy`/`nolan.ns.cloudflare.com`)
+  and registrar (Dynadot), and all three are **simultaneously live**, serving
+  near-identical Vietnamese-language pages — same exact title (*"UFA Bet – Cá
+  Cược Thể Thao & Casino Trực Tuyến Hàng Đầu"*), same template, minor copy
+  variations. This is the strongest same-operator-confirmed-live evidence
+  found anywhere in this investigation — stronger than anything on the
+  AskMeBet side, where no two branded domains were ever caught live with
+  matching content simultaneously.
+
+### Real law enforcement history — a different tier of finding entirely
+
+Unlike AskMeBet, which stayed a ghost through every technique tried, UFA/
+UFABET has been the subject of actual Thai government investigation, with
+named individuals, seized assets, and criminal charges:
+
+- **Thailand's Department of Special Investigation (DSI)**, Special Case No.
+  8/2566 (Nov 15, 2023): charged **Police Captain Nattasakdithat** (an agent
+  for the UFABET network) and **Mr. Pakpoom** (described as UFA's financial
+  director) with unlicensed electronic gambling and money laundering. DSI's
+  own summary: Nattasakdithat *"marketed the online gambling website to find
+  customers... received payments through his own bank account and
+  transferred the payments to the owners."* Over 40 million baht seized;
+  *"many agents had fled from their residences and some had fled abroad."*
+  ([DSI official release](https://www.dsi.go.th/en/Detail/de2f5a3f0c742107e2c25245d4c0bf54))
+- Independent reporting on the same case (Casino.org, VegasSlotsOnline): DSI
+  seized **two resorts/villas in Phuket** (reported values $28–57M across
+  outlets), tied to an operation overseeing roughly **80 mule bank accounts**
+  (some holding over 1 billion baht), with **83 bank accounts** (mostly
+  foreign-owned) seized in the wider probe.
+- **A larger, connected network**: multiple Bangkok Post/Thaiger stories
+  identify a figure known as "Inspector Sua" as **Pol Lt Col Wasawat
+  Mukurasakul**, a Royal Thai Police officer (suspended pending investigation,
+  reportedly fled the country), whose network is independently described as
+  supervising UFA Bet's affiliates. That network is reported to involve
+  **60+ linked firms** (7 directly running gambling sites), estimated revenue
+  over **10 billion baht/year**, and led to **30 arrests across 39 raided
+  locations**.
+- Multiple independent sources describe UFA Bet as **"one of Thailand's three
+  biggest gambling networks."**
+- One unverified loose thread: a "UFABET LTD" UK Companies House entry
+  (incorporated April 2026) turned up in search, but nothing ties it to the
+  actual Thai network beyond the name match — generic-keyword shell
+  registrations are common and usually unrelated. Flagged, not relied on.
+
+### Why the two cases look so different
+
+AskMeBet: no license, no registrant, no affiliate footprint, no news
+coverage — a platform vendor deliberately kept invisible. UFA/UFABET: large
+and established enough to have drawn real state investigative attention,
+with an internal agent/commission economy (commissions reported up to 85%)
+documented by the investigators themselves. Independently described as one
+of the *three biggest* networks in the country — AskMeBet, by comparison,
+reads like a smaller or newer platform still operating below that threshold
+of visibility.
 
 ## Summary numbers
 
@@ -332,5 +510,16 @@ dormant/parked rather than simultaneously-live (see caveat above).
 - Add a parking-nameserver pre-filter (see false-positive section) to
   nrdguard as a concrete engineering change — candidates confirmed in this
   investigation: `dyna-ns.net`, `afternic.com`, `domaincontrol.com` (GoDaddy
-  default), `parity.domains`/`lander.parity.domains`, `dropcatch.com`.
-- `askmebet.tech` — left as a flagged lead, not pursued further (see above).
+  default), `parity.domains`/`lander.parity.domains`, `dropcatch.com`,
+  `dns-parking.com` (Hostinger).
+- `askmebet.tech` — left as a flagged lead, not pursued further (see
+  AskMeBet case study above).
+- Consider adding `Askmeslot`, `Askmelotto`, `Askmeplay`, and a broader UFA
+  mirror sweep (only 20 of an unknown total UFA domains were in-scope here)
+  to future sampling rounds — both platforms are confirmed larger than what
+  nrdguard has caught so far.
+- The UFA/DSI case is a rare instance where this kind of domain-recon work
+  connects directly to a real, ongoing law-enforcement matter — worth keeping
+  in mind if any of nrdguard's future findings look like they'd be useful to
+  route toward an actual reporting channel, rather than only internal
+  blocklist tuning.
