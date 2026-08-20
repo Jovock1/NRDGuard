@@ -326,6 +326,59 @@ tracking directly — a domain landing on this exact pair is very likely part
 of this same live template-factory operation regardless of what brand name
 it's wearing.
 
+### Full nameserver breakdown
+
+Grouped every domain ever looked up in this investigation (272 domains, 107
+distinct nameserver pairings) by its nameserver pair. **Most groupings are
+singletons** — a domain on its own uniquely-assigned Cloudflare pair — which
+is itself useful context: it confirms multi-domain sharing is the exception,
+not routine pool reuse, so the clusters below are meaningful rather than
+coincidental.
+
+**Groupings with 4+ domains:**
+
+| Nameservers | Domains | Who |
+|---|---|---|
+| `amy.ns.cloudflare.com` / `nolan.ns.cloudflare.com` | 46 | The live template-factory cluster (SBOBET, F8Bet, UFA, Betway, CasinoMega, Tiger Gaming, StarSports + generic siblings) |
+| `ns1.dyna-ns.net` / `ns2.dyna-ns.net` | 30 | Team Internet AG / ParkingCrew — dead placeholders (see headline finding) |
+| `cloe.ns.cloudflare.com` / `norman.ns.cloudflare.com` | 18 | AskMeBet's own zone — `askmebet.tech`, `askmebettournament.com`, all 16 `test-rollover-single` QA domains |
+| `dns1.registrar-servers.com` / `dns2.registrar-servers.com` | 11 | Namecheap default parking (`fafaaffiliate.com`, `trustfafa.*`, `chobanicasinoguncel.xyz` — confirmed unrelated squatting, see FAFA178 case study) |
+| `ns5.afternic.com` / `ns6.afternic.com` | 5 | GoDaddy/Afternic marketplace parking |
+| `ns19/ns20.domaincontrol.com` | 4 | GoDaddy default parking — dormant `ufa1234`/`1234ufabet` variants |
+| `micah.ns.cloudflare.com` / `summer.ns.cloudflare.com` | 4 | More F8Bet variants (`f8bet88.bet`, `f8bet90.com`, `f8betb0.net`, `f8betv3.net`) — **a second, separate F8Bet infrastructure grouping** |
+| `mary.ns.cloudflare.com` / `ram.ns.cloudflare.com` | 4 | The *other* StarSports operator (`starsports.best/.click/.onl`) plus `tigergaming.onl` |
+
+**Groupings with 2–3 domains** (selected): `mariah`/`ned.ns.cloudflare.com`
+(the confirmed live FAFA178 cluster — `fafa178skh.com`, `fafa178skhm.com`,
+`fafa178wiw.com`); `ben`/`peaches.ns.cloudflare.com` (a third F8Bet-adjacent
+grouping — `8f8bet.vip`, `highbet.vip`, `topxbet.best`); `felipe`/`kara.ns
+.cloudflare.com` (Indonesian APK-funnel siblings `autowin88o.com`,
+`dewa777o.com`, `gila138n.com`); `dina`/`jeremy.ns.cloudflare.com`
+(`fatcai99app.site`, `sbobet886cup.site`, `tanduktotowow.site`);
+`byte`/`pixel.dns-parking.com` (`profesorbet.top`, `ufa289n.store` —
+Hostinger parking); four more small GoDaddy-default pairs
+(`ns27/ns28`, `ns29/ns30`, `ns35/ns36`, `ns53/ns54.domaincontrol.com`), each
+holding 2–3 dormant `ufa1234`/`ufabet1234` variants — confirming the dormant
+UFA stockpile is spread across *several* different GoDaddy default-IP slots,
+not concentrated on one.
+
+**A correction this surfaced**: F8Bet and StarSports each split across
+**at least 3 separate nameserver groupings**, not one. "The F8Bet family"
+and "the StarSports family" aren't single monolithic operations — each is
+multiple distinct infrastructure groups sharing a brand name, the same
+pattern already found for FAFA178's `fafaaffiliate.com`/`trustfafa.com`
+being unrelated squatting rather than the real platform.
+
+**One notable singleton**: `ns1.ufa356bet.net`/`ns2.ufa356bet.net` — the
+only **self-hosted** vanity nameserver pair in the entire dataset (every
+other multi-domain grouping runs on a third-party registrar or Cloudflare's
+NS pool), consistent with `ufa356bet.net` being a longer-lived, more
+independently-operated property (see UFA/UFABET case study).
+
+The remaining 31 domains have no nameservers at all in this dataset — mostly
+orphaned zones, expired delegations, or a handful of lookups never retried —
+not a meaningful cluster, just absent data.
+
 ## Case study: AskMeBet
 
 ### The `askmebet.tech` / QA-pipeline lead
