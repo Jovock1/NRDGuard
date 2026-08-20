@@ -286,6 +286,40 @@ nameserver pair (`mary.ns.cloudflare.com`/`ram.ns.cloudflare.com`) than
 at least two separate, unconnected operations targeting different regional
 markets, not just this one factory.
 
+### A second, independent fingerprint: the image pipeline
+
+Cloudflare doesn't expose account ownership to outside observers by
+design — there's no legitimate lookup for "which account owns this zone."
+But a second passive signature turned out to be more specific than the
+nameserver pair alone. Checked TXT records first (nothing — no verification
+codes, no email infra, consistent with the zero-footprint pattern everywhere
+else in this investigation), then the `og:image` meta tag on every cached
+domain in the cluster. All 24 checked follow an **identical, locale-aware
+naming convention**:
+
+- `ho-chi-minh-casino-betting-vietnam-coffee-00802.jpg`
+- `vung-tau-casino-night-market-02541.jpg`
+- `da-lat-card-game-vietnam-coffee-02574.jpg`
+- `bogura-cricket-betting-bangladesh-model-00683.jpg` (on the one
+  Bengali-language domain, `betway365.best` — Bogura is a real district in
+  Bangladesh)
+
+Every filename follows `[city]-casino-betting-[descriptor]-[5-digit-ID].jpg`,
+with the city/theme automatically matched to the target language (Vietnamese
+cities — Ho Chi Minh, Hanoi, Da Lat, Vung Tau, Phu Quoc, Ha Long Bay, Mekong —
+for the Vietnamese sites; Bangladeshi geography for the one Bengali site).
+That's evidence of an **automated content-generation pipeline** — something
+that picks a city/theme appropriate to the target language and generates a
+uniquely-numbered image to match, per domain — not just shared hosting.
+Favicons across the same domains are *not* byte-identical (different hashes,
+different file sizes), so brand identity (name, favicon, minor copy) is
+customized per skin on top of a shared structural backbone (image pipeline,
+title template, hosting). Two independent operators coincidentally landing on
+the same Cloudflare nameserver pool slot is at least conceivable by chance;
+two independent operators independently producing the identical AI-image
+naming grammar, locale-matched, across 24 different brands, is not — this
+corroborates the nameserver-pair finding rather than resting on it alone.
+
 **Recommendation for nrdguard**: `amy.ns.cloudflare.com`/`nolan.ns
 .cloudflare.com` is a high-confidence infrastructure signature worth
 tracking directly — a domain landing on this exact pair is very likely part
