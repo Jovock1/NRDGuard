@@ -33,11 +33,12 @@ JS from domains our own scanner flagged as likely malicious.
 
 156 domains randomly sampled from the `Gambling` category across six rounds
 (40, then +16, then +100 — plus 6 targeted spot-checks of two specific
-name-clusters), plus two separate deep-dive case studies chasing specific
-operators to ground: **AskMeBet** and **UFA/UFABET** (see below). Every
-sampled domain got a `domain_report` (DNS/WHOIS/ASN/geo) and a
-`fetch_homepage` at minimum; several got `fetch_rendered` and deeper follow-up
-where the surface result was ambiguous or interesting.
+name-clusters), plus three separate deep-dive case studies chasing specific
+operators to ground: **AskMeBet**, **UFA/UFABET**, and **FAFA178** (the third
+found by following a lead out of the first — see below). Every sampled domain
+got a `domain_report` (DNS/WHOIS/ASN/geo) and a `fetch_homepage` at minimum;
+several got `fetch_rendered` and deeper follow-up where the surface result
+was ambiguous or interesting.
 
 ## Headline finding: a large share of "Gambling" flags aren't showing gambling content
 
@@ -384,6 +385,31 @@ attacking a named rival:
   BBM Testlabs) — and misrepresents GLI/BBM Testlabs specifically, which are
   game-testing/certification labs, not gambling regulators.
 
+### The Telegram link doesn't actually go to AskMeBet
+
+The `askmebetkhm.com` Wayback snapshot has a *"Contact via Telegram"*
+button. Its `href` isn't a direct Telegram link — it's a cloaked redirect
+through `replug.link/e2eb17ed`, a link-tracking/cloaking service. Resolving
+that redirect (a HEAD request, not an actual click-through):
+
+> `location: https://telegram.me/FAFA178_CONVBOT?start=phsseo`
+
+That's a completely different, unrelated brand — **FAFA178** — routed through
+a bot literally named "CONVBOT" (conversion bot) with what looks like an
+affiliate/traffic-source tracking parameter (`phsseo`).
+
+**This revises how `askmebetkhm.com`/`askmebetkh.com` should be read.** They're
+very likely not AskMeBet's own regional marketing at all — they're
+independent SEO/affiliate content sites that rank for "AskMeBet" search
+demand (consistent with the AI-generated-filler style already flagged) and
+monetize the traffic by funneling it to whichever platform actually pays an
+affiliate commission — in this case FAFA178, not AskMeBet. The "platform
+provider... licensed Cambodian operators" quote pulled from that site earlier
+is probably still an accurate general description (these SEO writers
+sometimes get real details right), but should be held a little more loosely
+given the site publishing it isn't first-party. This directly led to the
+[FAFA178 case study](#case-study-fafa178) below.
+
 ### Corporate registry search — dead end, and why
 
 Checked Curaçao's Chamber of Commerce (KVK), Hong Kong's Companies Registry,
@@ -462,16 +488,149 @@ named individuals, seized assets, and criminal charges:
   actual Thai network beyond the name match — generic-keyword shell
   registrations are common and usually unrelated. Flagged, not relied on.
 
-### Why the two cases look so different
+### Agent recruitment — advertised in the open
+
+Unlike AskMeBet and FAFA178 (below), UFA runs a whole ecosystem of dedicated
+recruitment sites (`ufabetkhmer.com/en/agent-ufa/`, `ufabets188.com/en
+/registration/`, `ufabetagent.com` — all since expired, recovered via
+Wayback). The pitch is standardized across all of them:
+
+- **Up to 85% commission share**, explicitly framed as possible only because
+  "we are an agent of UFABET directly without other partners."
+- **A tiered structure**: register as a basic Agent, get promoted to
+  **"Super"** status, then recruit and manage your own sub-agent network and
+  earn commission on their activity too — multi-level, not flat.
+- **A credit/leverage system**: *"you place 20,000 baht deposit, you will
+  receive 100,000 baht to manage with your customers"* — 5x leverage on
+  whatever the agent deposits, to extend credit to their own players.
+- **A real backend admin panel**: *"manage your customers from UFABET
+  backend such as credit topping up, credit withdrawal, suspend use of
+  members, create a user for a member to bet"* — a genuine self-service
+  dashboard, not just a referral link.
+- **Openly published contact channels**: a phone number (`097-513-1801`) and
+  a direct LINE add-friend link (`https://line.me/ti/p/q4tTwNwsyu`) — LINE
+  being the dominant messaging app in Thailand, the same functional role
+  Telegram plays for AskMeBet/FAFA178's Cambodia-facing operations. Also
+  surfaced another brand variant: `UFA247.com`.
+
+This is a franchise/MLM-shaped recruitment model — recruit players, then
+recruit recruiters, with leveraged credit and a management dashboard doing
+the work — which directly explains the DSI case above: a network described
+as "agents" managing "mule accounts," 60+ firms deep, because the growth
+model is designed to spawn semi-independent sub-operators.
+
+### Why UFA and AskMeBet look so different
 
 AskMeBet: no license, no registrant, no affiliate footprint, no news
 coverage — a platform vendor deliberately kept invisible. UFA/UFABET: large
 and established enough to have drawn real state investigative attention,
-with an internal agent/commission economy (commissions reported up to 85%)
-documented by the investigators themselves. Independently described as one
-of the *three biggest* networks in the country — AskMeBet, by comparison,
-reads like a smaller or newer platform still operating below that threshold
-of visibility.
+with an internal agent/commission economy documented both by the operation
+itself (its own recruitment sites) and by investigators. Independently
+described as one of the *three biggest* networks in the country — AskMeBet,
+by comparison, reads like a smaller or newer platform still operating below
+that threshold of visibility. (See the three-way comparison after the
+FAFA178 case study below for how FAFA178 fits into this picture.)
+
+## Case study: FAFA178
+
+Found by accident: the "Contact via Telegram" button on an AskMeBet-branded
+SEO site turned out to redirect to a Telegram bot for a different, unrelated
+platform (see [The Telegram link doesn't actually go to
+AskMeBet](#the-telegram-link-doesnt-actually-go-to-askmebet) above). That
+platform, FAFA178, turned out to be worth investigating in its own right.
+
+### Profile
+
+FAFA178's own marketing claims **"over 12 years operating in Southeast
+Asia"** — if accurate, older than either AskMeBet or UFA — backed by a
+noticeably broader real third-party provider roster than either of the other
+two platforms: PG Soft, Pragmatic Play, JILI, CQ9, Habanero, NetEnt, UU
+Slots, AFB Gaming, VPLUS (slots); EVO Gaming, SA Gaming, DG99, Sexy Casino,
+ALLBET (live casino); AFB1188, SABA, SBO, TF E-Sports (sportsbook). Supports
+Bitcoin and Tether (USDT), and four parallel support channels (live chat,
+email, Telegram, WhatsApp) rather than one.
+
+**The license claim is vaguer than AskMeBet's — and that's a more defensible
+evasion.** No specific license number anywhere, just *"operates under an
+international license"* with no regulator named. AskMeBet's mistake was
+citing a specific, checkable number (Curacao `8048/JAZ`) that we could
+directly disprove via Antillephone's validator; FAFA178 never gives us
+anything that concrete to disprove in the first place.
+
+**A confirmed "brand family," bigger than AskMeBet's sub-brands.** FAFA178's
+own site navigation lists six sister brands directly (Fafa178, Fafa321,
+Fafa188, Fafa288, Fafa877, 8Fafafa) under a menu literally labeled "Fafa
+Brand Family" (ตระกูลแบรนด์ Fafa). Further search surfaced at least four more
+active variants: FAFA365, FAFA456, FAFA123, FAFA333.
+
+### Infrastructure
+
+`fafa178skh.com` and `fafa178wiw.com` are byte-identical live mirrors (same
+title, same content) — the same live-mirror pattern found with UFA.
+`fafa178skhm.com` was registered at the exact same second as one of its
+siblings — automated bulk registration, consistent with every other cluster
+in this investigation. One domain, `fafa178wiw.com`, is genuinely older
+(March 2025) — the same two-tier pattern found with `ufa356bet.net`: a
+longer-lived core property underneath a constantly-refreshed layer of
+disposable mirrors.
+
+### Ownership — a ghost, same as AskMeBet
+
+No corporate registry hit anywhere (Co., Ltd, N.V., or otherwise), no
+independent review coverage (nothing on Casino.guru or AskGamblers), no
+law-enforcement or news coverage found by any search. Zero `fafa178`-branded
+domains were ever flagged by nrdguard directly — same blind spot as
+AskMeBet.
+
+### The `fafaaffiliate.com` lead — a clean dead end
+
+nrdguard's blocklist does contain a broader, unbranded `fafa*` cluster (19
+domains, including `fafaaffiliate.com` and `trustfafa.com`/`trustfafa.online`
+— names that looked like they could be FAFA178's real agent/trust-building
+infrastructure). Checked 8 of them directly:
+`fafaaffiliate.com`, `trustfafa.com`, `trustfafa.online`, `fafa-bet.online`,
+`fafa-bet.vip`, `fafa-spins.com`, `fafaonline.casino`, `fafaonlinecasino.com`
+— **all eight return the identical 2,963-byte Namecheap/Parity Domains
+parking placeholder.** ("Parity Domains" — `lander.parity.domains` — turns
+out to be Namecheap's own default parked-page product, not a fully
+independent third party as first assumed.)
+
+**This is a clean, informative negative result, not a failed search.**
+nrdguard's `fafa*` cluster and the real, live FAFA178 platform
+(`fafa178thb.com`, `fafa178skh.com`, etc. — found only through external web
+search) are **two entirely separate populations of domains** that happen to
+share a generic, catchy syllable. Nobody registered `fafaaffiliate.com` on
+behalf of the real platform; it's speculative squatting, unconnected to the
+actual operator. The real FAFA178 brand family remains completely outside
+anything nrdguard has ever flagged.
+
+### No public agent/affiliate program found — a real contrast with UFA
+
+Searched extensively (English and Thai-language queries, the brand family
+names together, and FAFA178's own site source for any agent/partner links)
+and found **nothing** — no recruitment domains, no published commission
+structure, no contact channel for prospective operators, anywhere. FAFA178's
+own consumer-facing sites don't mention an agent or partner program at all,
+unlike AskMeBet's SEO sites (which at least *describe* the platform-provider
+model to players).
+
+### Three platforms, three different postures
+
+| | Verifiable license | Corporate registry hit | News/legal coverage | Public agent recruitment | In nrdguard's data |
+|---|---|---|---|---|---|
+| **UFA/UFABET** | Various claims, unverified | None found | **Yes** — DSI charges, seized resorts, "Inspector Sua" network | **Extensive** — dedicated sites, published terms | Yes — 20 domains |
+| **AskMeBet** | Fabricated (proven invalid) | None found | None found | None on its own sites | **No** — zero domains |
+| **FAFA178** | Vague, unfalsifiable | None found | None found | **None found anywhere** | **No** — zero domains for the real brand family |
+
+UFA is the most *operationally* exposed of the three — real law enforcement
+history and an openly-advertised recruitment funnel — precisely because its
+growth model depends on being findable by prospective agents. AskMeBet and
+FAFA178 are both close to invisible by comparison, but for what look like
+different reasons: AskMeBet's exposure came from sloppy tracking-link hygiene
+(the cloaked Telegram redirect that led to this whole thread) and a
+disprovable license claim, while FAFA178 avoided both mistakes — nothing
+checkable, nothing traceable, and evidently no public recruitment funnel to
+leak through in the first place.
 
 ## Summary numbers
 
@@ -514,10 +673,14 @@ dormant/parked rather than simultaneously-live (see caveat above).
   `dns-parking.com` (Hostinger).
 - `askmebet.tech` — left as a flagged lead, not pursued further (see
   AskMeBet case study above).
-- Consider adding `Askmeslot`, `Askmelotto`, `Askmeplay`, and a broader UFA
-  mirror sweep (only 20 of an unknown total UFA domains were in-scope here)
-  to future sampling rounds — both platforms are confirmed larger than what
-  nrdguard has caught so far.
+- Consider adding `Askmeslot`, `Askmelotto`, `Askmeplay`, a broader UFA
+  mirror sweep (only 20 of an unknown total UFA domains were in-scope here),
+  and the confirmed FAFA brand family (`Fafa178/321/188/288/877/365/456/123
+  /333/8Fafafa`) to future sampling rounds — all three platforms are
+  confirmed larger than what nrdguard has caught so far, and FAFA178's real
+  domain family has **zero** overlap with the `fafa*` cluster nrdguard
+  already flags (that cluster is unrelated speculative squatting — see
+  FAFA178 case study).
 - The UFA/DSI case is a rare instance where this kind of domain-recon work
   connects directly to a real, ongoing law-enforcement matter — worth keeping
   in mind if any of nrdguard's future findings look like they'd be useful to
