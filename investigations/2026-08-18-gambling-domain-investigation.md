@@ -235,6 +235,63 @@ So the biggest name-based clusters likely represent a speculator's
 permanent nrdguard signal, weight cluster priority by confirmed-live count,
 not raw registration count.
 
+## The `amy`/`nolan` cluster — a confirmed live template factory
+
+While spot-checking a "brand-impersonation-risk" group of clusters whose
+stems matched real, recognizable brands (`stake`, `betway`, `starsports`,
+`casinomega`, `tigergaming`), a pattern emerged that turned out to be bigger
+than any single brand: **every one of them (except `stake`, a false alarm —
+see below) shares the exact same Cloudflare nameserver pair**,
+`amy.ns.cloudflare.com` / `nolan.ns.cloudflare.com`, and follows an
+**identical title template**: *"[Brand Name] – Cá Cược Thể Thao & Casino Trực
+Tuyến Hàng Đầu [Việt Nam]"* (Vietnamese), with a Bengali variant confirmed
+too.
+
+**`stake` — false alarm, not impersonation.** `stake7799.com`: *"stake779 -
+Pusat Download File Berkualitas untuk Pengguna Indonesia"* — an Indonesian
+APK-download hub coincidentally using "stake" as a numbered brand name, not
+borrowing Stake.com's identity. Lower priority than initially flagged.
+
+**Everything else checked out as real, live, and connected.** Scanning every
+domain already looked up in this investigation (272 files) plus a targeted
+expansion into the full `sbobet`, `f8bet`, `betway365`, `casinomega`,
+`tigergaming`, and `starsports` name-families turned up **46 domains
+confirmed on this exact nameserver pair** — including every single
+`betway365` TLD variant checked, and most of `casinomega`/`tigergaming`:
+
+| Domain | Title |
+|---|---|
+| `betway365.best` | *"Betway 365 – বাংলাদেশের সেরা অনলাইন বেটিং প্ল্যাটফর্ম"* (**Bengali** — "Bangladesh's best online betting platform") |
+| `betway365.wine`/`.run`/`.bio`/`.fun`/`.onl`/`.bid` | Vietnamese, identical title |
+| `starsports.bio`/`.bid` | *"StarSports – Cá Cược Thể Thao & Casino Trực Tuyến Hàng Đầu"* |
+| `casinomega.click`/`.run`/`.bio`/`.bid`/`.fun`/`.onl` | *"CasinoMega"*/*"Casino Mega"* variants, same tagline |
+| `tigergaming.vip`/`.run`/`.bid`/`.wine` | *"Tiger Gaming – Cá Cược Thể Thao & Casino..."* |
+| `sbobetwap.click`, `sbobet-app.net`, `sbobet-khelo.net`, `sbobet-play.net`, `sbobet-win.net` | *"SBOBETWAP"*/*"SBO Bet"* variants |
+| `f8betlove.app`, `f8betcon.bet`, `f8beta2com.click/.onl`, `f8beta2con.best/.click`, `f8betbeta2.best/.click`, `f8betcasino.best/.onl` | *"F8Bet..."* variants |
+| `ufabet-bangla.net`, `ufabet-jit.net`, `ufabet-win.com` | *"UFA Bet"* (the confirmed-live UFA mirror cluster from the UFA/UFABET case study) |
+| `ga888ib.bet`, `hitclubvin.best`, `hocvienxoso1net.bet`, `neu88com.com`, `xoso666com.bet`, `1xbetcm.best`, `90jili.cash`, `bancacom.bet` | Generic-named siblings, same title template, same nameservers |
+
+**This is the largest, best-evidenced single infrastructure cluster in this
+entire investigation — and unlike the dead Team Internet AG cluster in §1,
+every domain here is confirmed live simultaneously**, not dormant. One shared
+hosting/templating operation is running at least **8 distinct "brand
+names"** (SBOBET, F8Bet, UFA, Betway, CasinoMega, Tiger Gaming, StarSports,
+plus several generic-named siblings) across at least two languages
+(Vietnamese primary, Bengali confirmed), some borrowing real, recognizable,
+*licensed* company names (Betway specifically — a genuine UK-regulated
+bookmaker) for the credibility signal rather than inventing a name from
+scratch. `starsports.best` (Bengali/Bangladesh-focused) sits on a *different*
+nameserver pair (`mary.ns.cloudflare.com`/`ram.ns.cloudflare.com`) than
+`starsports.bio` — meaning the "StarSports" name itself is being reused by
+at least two separate, unconnected operations targeting different regional
+markets, not just this one factory.
+
+**Recommendation for nrdguard**: `amy.ns.cloudflare.com`/`nolan.ns
+.cloudflare.com` is a high-confidence infrastructure signature worth
+tracking directly — a domain landing on this exact pair is very likely part
+of this same live template-factory operation regardless of what brand name
+it's wearing.
+
 ## Case study: AskMeBet
 
 ### The `askmebet.tech` / QA-pipeline lead
@@ -663,6 +720,13 @@ dormant/parked rather than simultaneously-live (see caveat above).
   (up from an initial 40) and has stayed consistent as the sample grew —
   reasonably solid. Could still be checked directly against nrdguard's
   classification logic/prompts for a root-cause fix.
+- The `amy`/`nolan.ns.cloudflare.com` cluster (46 confirmed domains, live,
+  8+ brand names) is worth tracking as its own signature going forward — it's
+  the single highest-confidence "same operator" infrastructure fingerprint
+  found in this investigation, and the expansion search wasn't exhaustive
+  (only `sbobet`/`f8bet`/`betway365`/`casinomega`/`tigergaming`/`starsports`
+  families were checked; other brand-stem clusters from the 126-strong
+  unexplored list likely add more members).
 - Run the brand-stem clustering at a lower threshold (3+ members) to see how
   much bigger the "real operator" count gets, and weight by confirmed-live
   count rather than raw registration count (see caveat above).
