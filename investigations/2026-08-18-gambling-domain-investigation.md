@@ -320,6 +320,61 @@ two independent operators independently producing the identical AI-image
 naming grammar, locale-matched, across 24 different brands, is not — this
 corroborates the nameserver-pair finding rather than resting on it alone.
 
+### A third fingerprint: the HTML itself reads as LLM-generated
+
+No shared API backend, no `meta generator` tag, no "Powered by X" watermark
+anywhere in the cached HTML for 26 of the 46 domains — these are fully
+static, self-contained pages with zero client-side calls to any shared
+service. So there's no explicit company/tool name sitting in a script tag.
+But the **HTML comment style** is unmistakable, and more specific than
+either fingerprint above.
+
+Every page in the cluster follows the *same ~20–25 section recipe*, marked
+with distinctive banner-style comments:
+
+```
+════════════════════════════════════════════════
+     NAVBAR
+════════════════════════════════════════════════
+```
+
+That box-drawing Unicode divider format, wrapping a section label, repeating
+consistently across dozens of unrelated-branded domains, is a recognizable
+pattern from LLM-driven code generation — structural scaffolding a coding
+assistant inserts when asked to "build a landing page with these sections,"
+not something a human developer bothers to hand-write at this scale. Some
+pages use the plain form (`NAVBAR`, `HERO`, `MARQUEE`, `STATS BAR`,
+`TRUST BAR`, `JACKPOT COUNTER`), others the full banner form — same
+underlying convention either way.
+
+**The most telling detail**: `betway365.run`'s comments are *bilingual
+mid-generation* — English structural labels (`NAVBAR`, `HERO`,
+`TRUST BADGES`, `MATCH SCHEDULE / SCORE`, `SPORTS FOCUS CARDS`,
+`VIP LEVELS`, `PARTNERS`, `FAQ`) interleaved with Vietnamese ones that
+reference the specific brand and content (`GIỚI THIỆU BETWAY 365 + ẢNH` —
+"Introduction BETWAY 365 + Image"; `ĐÁ GÀ TRỰC TIẾP` — "Live cockfighting";
+`SO SÁNH – BETWAY 365 VS CÁCH TRUYỀN THỐNG` — "Comparison — Betway 365 vs
+Traditional Method"). That mix reads like a generation pipeline where the
+*page structure* comes from an English template/prompt while the *content*
+gets generated per-brand in the target language — the seams between
+"instructed structure" and "generated content" are still visible in the
+comments. Also confirmed explicitly in two files: **Bootstrap 5 + Bootstrap
+Icons + Google Fonts**, loaded via `cdn.jsdelivr.net` — a completely
+standard, low-effort stack, exactly what an automated generator would
+default to rather than a bespoke build.
+
+**What this adds up to**: the "factory" is very likely a prompt-driven,
+LLM-based site-generation pipeline — not a traditional CMS or hand-maintained
+template — that takes a brand name and target language as input and
+produces a full Bootstrap-based page following a fixed section structure,
+locale-matched AI-generated stock photography (see above), and localized
+marketing copy, then deploys it under a fresh domain on the same Cloudflare
+account. Three independent fingerprints (nameserver pair, image-naming
+convention, comment/code-generation style) now point the same direction —
+none names the actual tool or vendor, but together they describe a specific,
+consistent operational pipeline rather than manual site-building by separate
+people per brand.
+
 **Recommendation for nrdguard**: `amy.ns.cloudflare.com`/`nolan.ns
 .cloudflare.com` is a high-confidence infrastructure signature worth
 tracking directly — a domain landing on this exact pair is very likely part
