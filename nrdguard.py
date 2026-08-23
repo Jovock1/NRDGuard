@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import collections.abc
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 import requests
@@ -23,6 +24,11 @@ try:
     ollama_chat = ollama.chat
 except Exception:
     ollama_chat = None
+
+try:
+    import dns.resolver
+except Exception:
+    dns = None
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger(__name__)
@@ -35,6 +41,14 @@ BATCH_SIZE = 500
 # agrees on both the domain and its category. Override via LLAMA_MODELS
 # (comma-separated) in .env.
 DEFAULT_MODELS = ["gemma4:31b-cloud", "qwen3.5:397b-cloud"]
+
+# Used to look up nameservers for the flagged-domains log. Queried directly
+# rather than through the system resolver, since this machine also serves a
+# DNS blocklist -- resolving through it could sinkhole the very domains
+# we're trying to fingerprint.
+NAMESERVER_RESOLVER_IP = os.getenv("NAMESERVER_RESOLVER_IP", "1.1.1.1")
+NAMESERVER_LOOKUP_WORKERS = 40
+NAMESERVER_LOOKUP_TIMEOUT = 3.0
 
 
 def get_configured_models():
@@ -442,6 +456,52 @@ def classify_domains(domains, model_name: str = None):
     return all_flagged, stats
 
 
+def _lookup_nameservers(domain, resolver):
+    try:
+        answer = resolver.resolve(domain, "NS")
+        return "; ".join(sorted(str(rdata.target).rstrip(".").lower() for rdata in answer))
+    except Exception:
+        # NXDOMAIN, no NS records, timeout, etc. -- newly registered domains
+        # routinely haven't propagated yet or never resolve at all. Not
+        # worth distinguishing the failure modes here; an empty nameserver
+        # is itself a signal (unregistered/parked/dead by lookup time).
+        return ""
+
+
+def resolve_nameservers(domains):
+    """Look up the authoritative nameservers for each domain, concurrently,
+    against a public resolver (see NAMESERVER_RESOLVER_IP). Returns
+    {domain: "ns1.example.com; ns2.example.com"}, with "" for domains that
+    didn't resolve. Missing dnspython degrades to "" for every domain rather
+    than failing the run -- same pattern as the optional ollama import."""
+    domains = sorted(domains)
+    if not domains:
+        return {}
+
+    if dns is None:
+        log.warning(
+            "dnspython not installed; skipping nameserver lookups for %d domains "
+            "(pip install dnspython to enable).", len(domains),
+        )
+        return {domain: "" for domain in domains}
+
+    resolver = dns.resolver.Resolver(configure=False)
+    resolver.nameservers = [NAMESERVER_RESOLVER_IP]
+    resolver.timeout = NAMESERVER_LOOKUP_TIMEOUT
+    resolver.lifetime = NAMESERVER_LOOKUP_TIMEOUT
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=NAMESERVER_LOOKUP_WORKERS) as executor:
+        futures = {executor.submit(_lookup_nameservers, domain, resolver): domain for domain in domains}
+        for future in as_completed(futures):
+            domain = futures[future]
+            results[domain] = future.result()
+
+    resolved = sum(1 for ns in results.values() if ns)
+    log.info(f"Resolved nameservers for {resolved:,}/{len(domains):,} flagged domains.")
+    return results
+
+
 def classify_domains_multi(domains, model_names):
     """Run classification against every model in model_names over the same
     domain list.
@@ -506,13 +566,14 @@ def write_daily_log(flagged, when: datetime = None):
     json_path = make_unique_timestamped_path(logs_subdir("json"), "flagged_domains", "json", now)
 
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["domain", "classification", "model"])
+        writer = csv.DictWriter(handle, fieldnames=["domain", "classification", "model", "nameserver"])
         writer.writeheader()
         for entry in flagged:
             writer.writerow({
                 "domain": entry["domain"],
                 "classification": sanitize_csv_field(entry["category"]),
                 "model": sanitize_csv_field(entry.get("model", "")),
+                "nameserver": sanitize_csv_field(entry.get("nameserver", "")),
             })
 
     with json_path.open("w", encoding="utf-8") as handle:
@@ -1220,6 +1281,10 @@ def main():
         domains = fetch_domains(target_date)
 
         per_model, all_flagged, consensus_flagged = classify_domains_multi(domains, models)
+
+        nameservers = resolve_nameservers({entry["domain"] for entry in all_flagged})
+        for entry in all_flagged:
+            entry["nameserver"] = nameservers.get(entry["domain"], "")
 
         write_daily_log(all_flagged, when=target_date)
         write_category_summary(all_flagged, when=target_date)
