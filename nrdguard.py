@@ -1019,17 +1019,44 @@ def fetch_url(url, secrets, timeout=120):
     include the full request URL -- without this, a failed request would
     write the live API key in cleartext to the pipeline's logs via main()'s
     generic exception handler.
+
+    Retries transient failures (connection errors, timeouts, 5xx) with
+    exponential backoff, same pattern as generate_with_llama's Ollama
+    retries -- domains-monitor.com has repeatedly dropped the connection on
+    this call specifically, well into a run, and previously took down the
+    entire pipeline (losing ~2 hours of already-completed classification)
+    for what turned out to be a several-second blip. A 4xx (bad key, not
+    found) is never worth retrying.
     """
-    try:
-        r = requests.get(url, timeout=timeout)
-        r.raise_for_status()
-        return r
-    except requests.exceptions.RequestException as e:
-        message = str(e)
+    def redact(text):
         for secret in secrets:
             if secret:
-                message = message.replace(secret, "***REDACTED***")
-        raise RuntimeError(f"Request failed: {message}") from None
+                text = text.replace(secret, "***REDACTED***")
+        return text
+
+    max_attempts = 5
+    base_delay = 3.0  # seconds
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            r = requests.get(url, timeout=timeout)
+            r.raise_for_status()
+            return r
+        except requests.exceptions.RequestException as e:
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            transient = status_code is None or status_code >= 500
+            message = redact(str(e))
+
+            if transient and attempt < max_attempts:
+                delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, 1)
+                log.warning(
+                    f"Request failed on attempt {attempt}/{max_attempts} "
+                    f"(status_code={status_code}): {message}. Retrying in {delay:.1f}s..."
+                )
+                time.sleep(delay)
+                continue
+
+            raise RuntimeError(f"Request failed: {message}") from None
 
 
 def read_zip_member_text(archive_bytes, max_size=MAX_ARCHIVE_MEMBER_BYTES):
