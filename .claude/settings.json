@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -A8 \"Source Serif 4\" /tmp/fonts.css | grep -B3 -A5 \"weight: 700\" | tail -30)",
+      "Read(//tmp/**)",
+      "Bash(grep -B3 -A2 \"weight: 400\" /tmp/fonts.css | grep -A5 \"Source Serif\" | grep -A4 \"font-weight: 400\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(python3 -c ' *)",
+      "Bash(tee /tmp/batch5_domains.txt)",
+      "Bash(cat /tmp/batch5_domains.txt casipot179.com casipot159.com casipot219.com raykobet476.com raykobet489.com raykobet469.com)",
+      "Bash(echo 'casipot179.com *)",
+      "Bash(split -n l/2 /tmp/batch5_domains.txt /tmp/b5_)",
+      "Bash(python3 -c \" *)",
+      "Bash(split -l 20 /tmp/batch6_domains.txt /tmp/b6_)",
+      "Bash(timeout 45 .venv/bin/python -c ' *)",
+      "Bash(split -l 10 /tmp/batch6_domains.txt /tmp/hb6_)",
+      "WebSearch",
+      "WebFetch(domain:casino.guru)",
+      "Bash(timeout 35 .venv/bin/python -c ' *)",
+      "Bash(timeout 15 curl -s \"https://validator.antillephone.com/validate/?domain=askmebet8.com\")",
+      "Bash(timeout 15 curl -s \"https://validator.antillephone.com/validate/?domain=www.askmebet8.com\")",
+      "Bash(.venv/bin/python -c ' *)",
+      "Bash(timeout 20 .venv/bin/python -c ' *)",
+      "Bash(timeout 25 .venv/bin/python -c ' *)",
+      "Bash(timeout 30 .venv/bin/python -c ' *)",
+      "WebFetch(domain:siit.co)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
+    ]
+  }
+}
