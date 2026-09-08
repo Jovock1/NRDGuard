@@ -649,6 +649,7 @@ def write_daily_digest(
     list1_final_total,
     list2_final_total,
     when: datetime = None,
+    compromised_fetch_failed: bool = False,
 ):
     now = when or datetime.now()
     digest_path = make_unique_timestamped_path(logs_subdir("daily_summary"), "daily_summary", "md", now)
@@ -695,6 +696,17 @@ def write_daily_digest(
         f"- Final: {list2_final_total:,} domains",
         "",
     ]
+
+    if compromised_fetch_failed:
+        lines += [
+            "## Note",
+            "The compromised-domains fetch failed for this run (see the run's log) "
+            "and was skipped rather than aborting the whole pipeline -- the numbers "
+            "above reflect classification results only, with nothing merged in from "
+            "the compromised/malware feed. Re-run that step for this date once the "
+            "feed is reachable again.",
+            "",
+        ]
 
     digest_path.write_text("\n".join(lines), encoding="utf-8")
     register_created(digest_path)
@@ -1322,13 +1334,32 @@ def main():
         list1_total_after_classify = add_to_blocklist(all_flagged, blocklist_path=list1_path)
         list2_total_after_classify = add_to_blocklist(consensus_flagged, blocklist_path=list2_path)
 
-        compromised = fetch_compromised_domains(target_date)
-        compromised_added, list1_final_total = add_compromised_to_blocklist(
-            compromised, blocklist_path=list1_path, when=target_date, write_log=True,
-        )
-        _, list2_final_total = add_compromised_to_blocklist(
-            compromised, blocklist_path=list2_path, when=target_date, write_log=False,
-        )
+        # A flaky compromised-feed fetch shouldn't take down a run that
+        # already completed the expensive part (classification) -- same
+        # reasoning as skipping a single failed classification batch rather
+        # than aborting the whole thing. domains-monitor.com has dropped
+        # this specific call, well past the retry window in fetch_url(),
+        # repeatedly; losing/delaying an entire day's classification+push
+        # over it is worse than shipping a run with that one step visibly
+        # flagged as skipped in the digest.
+        compromised = []
+        compromised_fetch_failed = False
+        try:
+            compromised = fetch_compromised_domains(target_date)
+        except Exception as e:
+            compromised_fetch_failed = True
+            log.error(f"Compromised-domains fetch failed, skipping that step for this run: {e}", exc_info=True)
+
+        if compromised:
+            compromised_added, list1_final_total = add_compromised_to_blocklist(
+                compromised, blocklist_path=list1_path, when=target_date, write_log=True,
+            )
+            _, list2_final_total = add_compromised_to_blocklist(
+                compromised, blocklist_path=list2_path, when=target_date, write_log=False,
+            )
+        else:
+            compromised_added, list1_final_total = [], list1_total_after_classify
+            list2_final_total = list2_total_after_classify
 
         write_daily_digest(
             total_domains_scanned=len(domains),
@@ -1342,6 +1373,7 @@ def main():
             list1_final_total=list1_final_total,
             list2_final_total=list2_final_total,
             when=target_date,
+            compromised_fetch_failed=compromised_fetch_failed,
         )
         hash_blocklist()
         push_to_github()
