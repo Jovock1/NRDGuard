@@ -985,30 +985,64 @@ def push_to_github():
     credential_helper = '!f() { echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f'
     push_env = os.environ.copy()
     push_env["GITHUB_TOKEN"] = token
-    try:
-        subprocess.run(
-            ["git", "-C", str(repo_dir), "-c", f"credential.helper={credential_helper}", "push", "-u", "origin", branch],
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=push_env,
-        )
-    except subprocess.CalledProcessError as exc:
-        # exc's command/stdout/stderr never contain the token itself (only
-        # the literal string "$GITHUB_TOKEN", resolved by the nested shell
-        # at runtime, not by this process), so this is safe to log as-is.
-        # str(exc) alone omits stdout/stderr, which is where git's actual
-        # reason (auth failure, non-fast-forward, LFS error, etc.) lives --
-        # log those explicitly or every failure just says "exit status 1".
-        stderr = exc.stderr.decode("utf-8", "replace").strip() if exc.stderr else ""
-        stdout = exc.stdout.decode("utf-8", "replace").strip() if exc.stdout else ""
-        log.warning("Git push failed: %s", exc)
-        if stderr:
-            log.warning("git stderr: %s", stderr)
-        if stdout:
-            log.warning("git stdout: %s", stdout)
-        log.warning("Skipping GitHub push and continuing without failing the entire pipeline.")
-        return None
+
+    # Network-flap markers seen from this machine's VPN dropping mid-push
+    # (kill switch blocks all traffic while it reconnects) -- distinct from
+    # a real git error (auth failure, non-fast-forward, LFS quota) that
+    # retrying can't fix.
+    TRANSIENT_GIT_MARKERS = (
+        "could not resolve host",
+        "connection timed out",
+        "connection refused",
+        "network is unreachable",
+        "could not connect to server",
+        "ssl connection",
+        "operation timed out",
+        "the requested url returned error: 5",
+    )
+
+    max_attempts = 5
+    base_delay = 5.0  # seconds
+    for attempt in range(1, max_attempts + 1):
+        try:
+            subprocess.run(
+                ["git", "-C", str(repo_dir), "-c", f"credential.helper={credential_helper}", "push", "-u", "origin", branch],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=push_env,
+            )
+            break
+        except subprocess.CalledProcessError as exc:
+            # exc's command/stdout/stderr never contain the token itself (only
+            # the literal string "$GITHUB_TOKEN", resolved by the nested shell
+            # at runtime, not by this process), so this is safe to log as-is.
+            # str(exc) alone omits stdout/stderr, which is where git's actual
+            # reason (auth failure, non-fast-forward, LFS error, etc.) lives --
+            # log those explicitly or every failure just says "exit status 1".
+            stderr = exc.stderr.decode("utf-8", "replace").strip() if exc.stderr else ""
+            stdout = exc.stdout.decode("utf-8", "replace").strip() if exc.stdout else ""
+            transient = any(marker in stderr.lower() for marker in TRANSIENT_GIT_MARKERS)
+
+            if transient and attempt < max_attempts:
+                delay = base_delay * (2 ** (attempt - 1))
+                log.warning(
+                    "Git push failed on attempt %d/%d (looks transient -- VPN/network blip): %s. "
+                    "Retrying in %.0fs...", attempt, max_attempts, stderr or exc, delay,
+                )
+                time.sleep(delay)
+                continue
+
+            log.warning("Git push failed: %s", exc)
+            if stderr:
+                log.warning("git stderr: %s", stderr)
+            if stdout:
+                log.warning("git stdout: %s", stdout)
+            log.warning(
+                "Skipping GitHub push and continuing without failing the entire pipeline "
+                "-- the commit is safe locally and the next run will push it automatically."
+            )
+            return None
 
     log.info("Pushed blocklist, logs, and hashes to GitHub")
     return True
@@ -1314,6 +1348,27 @@ def main():
         log.info(f"=== Unsafe New URL starting (replaying {target_date:%Y-%m-%d}) === models={models}")
     else:
         log.info(f"=== Unsafe New URL starting === models={models}")
+
+    # A previous run's push can fail (VPN kill switch blocking traffic while
+    # it reconnects, most commonly) after its commit already succeeded --
+    # that commit is then stuck local-only until something pushes it. Flush
+    # any such pending commit before starting today's work. CREATED_FILES is
+    # still empty here, so this can only push what a prior run already
+    # committed -- it commits nothing new of its own.
+    try:
+        repo_dir = Path(__file__).resolve().parent
+        branch = os.getenv("GITHUB_BRANCH", "main")
+        pending = subprocess.run(
+            ["git", "-C", str(repo_dir), "rev-list", "--count", f"origin/{branch}..HEAD"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        pending_count = int(pending.stdout.strip()) if pending.returncode == 0 and pending.stdout.strip().isdigit() else 0
+        if pending_count:
+            log.info(f"Found {pending_count} commit(s) not yet on GitHub from a previous run; attempting to push before starting today's work.")
+            if push_to_github():
+                log.info("Pending commit(s) pushed successfully.")
+    except Exception:
+        log.warning("Catch-up push for a previous run's pending commit failed; continuing with today's run.", exc_info=True)
 
     try:
         get_api_key()
