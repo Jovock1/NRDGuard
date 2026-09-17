@@ -469,6 +469,33 @@ def count_categories(flagged):
     return counts
 
 
+def compute_nameserver_clusters(flagged, top_n=10, min_count=2):
+    """Rank nameservers by how many distinct flagged domains use them this
+    run -- a nameserver shared across many freshly-flagged domains is a
+    much stronger signal of a single operator's infrastructure than any
+    one domain alone (the same clustering this repo's investigation
+    reports already do by hand, off the same nameserver data). Dedupes by
+    domain first (a domain flagged by multiple models has the same
+    nameserver recorded on each of its entries -- shouldn't count twice),
+    splits a domain's semicolon-joined nameserver list so each NS record
+    counts individually, and skips domains that didn't resolve ("" isn't a
+    real cluster). Returns [(nameserver, count), ...] sorted by count
+    descending, limited to top_n entries with at least min_count domains."""
+    domain_nameservers = {}
+    for entry in flagged:
+        ns_field = entry.get("nameserver", "")
+        if ns_field:
+            domain_nameservers[entry["domain"]] = ns_field
+
+    counts = Counter()
+    for ns_field in domain_nameservers.values():
+        for ns in ns_field.split("; "):
+            if ns:
+                counts[ns] += 1
+
+    return [(ns, count) for ns, count in counts.most_common(top_n) if count >= min_count]
+
+
 def classify_domains(domains, model_name: str = None):
     resolved_model = model_name or os.getenv("LLAMA_MODEL_NAME", "gemma4:12b")
     all_flagged = []
@@ -840,6 +867,25 @@ def write_daily_digest(
         f"- Domains every model agreed on (domain + category): {len(consensus_flagged):,}",
         "",
     ]
+
+    nameserver_clusters = compute_nameserver_clusters(all_flagged)
+    if nameserver_clusters:
+        lines += [
+            "## Top Nameservers This Run",
+            "Nameservers hosting 2+ of today's flagged domains -- often a sign of one operator's "
+            "infrastructure rather than independent registrations.",
+            "",
+            "| Nameserver | Flagged Domains |",
+            "|---|---|",
+        ]
+        for ns, count in nameserver_clusters:
+            # Nameserver text comes straight from an attacker-controlled DNS
+            # response (whoever registered the domain controls its own NS
+            # delegation) -- escape anything that would break out of this
+            # table cell rather than trusting it's a plain hostname.
+            safe_ns = ns.replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+            lines.append(f"| {safe_ns} | {count:,} |")
+        lines.append("")
 
     for result in known_list_results.values():
         lines += [
