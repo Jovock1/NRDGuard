@@ -50,6 +50,16 @@ NAMESERVER_RESOLVER_IP = os.getenv("NAMESERVER_RESOLVER_IP", "1.1.1.1")
 NAMESERVER_LOOKUP_WORKERS = 40
 NAMESERVER_LOOKUP_TIMEOUT = 3.0
 
+# Known ad/tracking server list, merged into both blocklists "no questions
+# asked" the same way the compromised-domains feed is -- entirely outside
+# the LLM classification scan. Peter Lowe's list: plain domain-per-line,
+# no API key needed, actively maintained, low false-positive rate. Override
+# via AD_LIST_URL in .env.
+AD_LIST_URL = os.getenv(
+    "AD_LIST_URL",
+    "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=nohtml&showintro=0&mimetype=plaintext",
+)
+
 
 def get_configured_models():
     raw = os.getenv("LLAMA_MODELS", "")
@@ -613,15 +623,17 @@ def write_category_summary(flagged, when: datetime = None):
     return csv_path, json_path
 
 
-def write_compromised_log(entries, when: datetime = None):
+def write_known_list_log(entries, when: datetime = None, prefix: str = "compromised_added", noun: str = "compromised"):
+    """Log domains newly added to the blocklist(s) from a known/curated
+    source (compromised feed, ad list, ...) -- not from LLM classification."""
     if not entries:
-        log.info("No new compromised domains to log")
+        log.info(f"No new {noun} domains to log")
         return None
 
     now = when or datetime.now()
 
-    csv_path = make_unique_timestamped_path(logs_subdir("csv"), "compromised_added", "csv", now)
-    json_path = make_unique_timestamped_path(logs_subdir("json"), "compromised_added", "json", now)
+    csv_path = make_unique_timestamped_path(logs_subdir("csv"), prefix, "csv", now)
+    json_path = make_unique_timestamped_path(logs_subdir("json"), prefix, "json", now)
 
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=["domain", "classification", "reason"])
@@ -633,7 +645,7 @@ def write_compromised_log(entries, when: datetime = None):
         handle.write("\n")
     register_created(csv_path)
     register_created(json_path)
-    log.info(f"Saved {len(entries)} newly added compromised domains to {csv_path} and {json_path}")
+    log.info(f"Saved {len(entries)} newly added {noun} domains to {csv_path} and {json_path}")
     return csv_path, json_path
 
 
@@ -650,7 +662,11 @@ def write_daily_digest(
     list2_final_total,
     when: datetime = None,
     compromised_fetch_failed: bool = False,
+    ad_fetched: int = 0,
+    ad_added=None,
+    ad_fetch_failed: bool = False,
 ):
+    ad_added = ad_added or []
     now = when or datetime.now()
     digest_path = make_unique_timestamped_path(logs_subdir("daily_summary"), "daily_summary", "md", now)
 
@@ -687,26 +703,41 @@ def write_daily_digest(
         f"- Domains fetched: {compromised_fetched:,}",
         f"- Newly added: {len(compromised_added):,}",
         "",
-        "## List 1 -- blocklist.txt (union of all models + compromised)",
+        "## Ad/Tracking Domains Feed",
+        f"- Domains fetched: {ad_fetched:,}",
+        f"- Newly added: {len(ad_added):,}",
+        "",
+        "## List 1 -- blocklist.txt (union of all models + compromised + ad list)",
         f"- After classification: {list1_total_after_classification:,} domains",
         f"- Final: {list1_final_total:,} domains",
         "",
-        "## List 2 -- blocklist_consensus.txt (model agreement + compromised)",
+        "## List 2 -- blocklist_consensus.txt (model agreement + compromised + ad list)",
         f"- After classification: {list2_total_after_classification:,} domains",
         f"- Final: {list2_final_total:,} domains",
         "",
     ]
 
+    notes = []
     if compromised_fetch_failed:
-        lines += [
-            "## Note",
+        notes.append(
             "The compromised-domains fetch failed for this run (see the run's log) "
             "and was skipped rather than aborting the whole pipeline -- the numbers "
             "above reflect classification results only, with nothing merged in from "
             "the compromised/malware feed. Re-run that step for this date once the "
-            "feed is reachable again.",
-            "",
-        ]
+            "feed is reachable again."
+        )
+    if ad_fetch_failed:
+        notes.append(
+            "The ad/tracking-domains fetch failed for this run (see the run's log) "
+            "and was skipped rather than aborting the whole pipeline -- nothing was "
+            "merged in from the ad list this time. Re-run that step for this date "
+            "once the feed is reachable again."
+        )
+    if notes:
+        lines.append("## Note")
+        for note in notes:
+            lines.append(note)
+            lines.append("")
 
     digest_path.write_text("\n".join(lines), encoding="utf-8")
     register_created(digest_path)
@@ -1273,9 +1304,84 @@ def fetch_compromised_domains(for_date: datetime = None):
     return domains
 
 
-def add_compromised_to_blocklist(compromised, blocklist_path: Path = None, when: datetime = None, write_log: bool = True):
+def _zip_bytes(text: str, member_name: str) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(member_name, text)
+    return buf.getvalue()
+
+
+def fetch_ad_domains(for_date: datetime = None):
+    """Fetch Peter Lowe's ad/tracking server list (see AD_LIST_URL) --
+    a known/curated list, entirely outside the LLM classification scan,
+    merged into both blocklists the same "no questions asked" way the
+    compromised feed is (see add_ad_domains_to_blocklist).
+
+    Archived as a zip (like the other two feeds) purely to reuse
+    find_latest_archive/find_archive_for_date/read_zip_member_text as-is,
+    even though the source itself is plain text, not a zip.
+
+    Deliberately doesn't sys.exit(0) when unchanged, unlike
+    fetch_domains()/fetch_compromised_domains() -- that short-circuit has
+    already caused real problems (a `-d` replay silently returning [] when
+    no archive existed yet for that date, and a SystemExit here would
+    bypass main()'s non-fatal try/except around this call entirely, since
+    SystemExit isn't an Exception subclass). Re-merging an unchanged list
+    is a no-op anyway (add_known_list_to_blocklist unions into what's
+    already there), so there's nothing to gain from exiting early.
+    """
+    repo_dir = Path(__file__).resolve().parent
+    archives_dir = repo_dir / "archives"
+    archives_dir.mkdir(exist_ok=True)
+
+    if for_date is not None:
+        date_str = for_date.strftime("%Y-%m-%d")
+        archive_path = find_archive_for_date(archives_dir, "ads", date_str)
+        if archive_path is None:
+            log.warning(
+                f"No ad-domains archive found for {date_str} in {archives_dir}; "
+                "skipping ad-domains step for this replay."
+            )
+            return []
+        log.info(f"Replaying ad-domains archive {archive_path}")
+        domains = read_zip_member_text(archive_path.read_bytes()).splitlines()
+        domains = [d.strip().lower() for d in domains if d.strip()]
+        log.info(f"Loaded {len(domains):,} ad domains.")
+        return domains
+
+    log.info("Fetching known ad/tracking domains")
+    r = fetch_url(AD_LIST_URL, secrets=[])
+    text = r.text
+    domains = [d.strip().lower() for d in text.splitlines() if d.strip() and not d.strip().startswith("#")]
+    archive_bytes = _zip_bytes("\n".join(domains) + "\n", "ads.txt")
+    archive_hash = hash_bytes(archive_bytes)
+
+    latest_archive = find_latest_archive(archives_dir, "ads")
+    if latest_archive is not None:
+        latest_hash = hash_file(latest_archive)
+        log.info(f"Latest local ad-domains archive: {latest_archive} ({latest_hash})")
+        if archive_hash == latest_hash:
+            log.info(f"Ad-domains list has not changed since the last archive. Using {len(domains):,} domains.")
+            return domains
+
+    now = datetime.now()
+    archive_path = make_unique_timestamped_path(archives_dir, "ads", "zip", now)
+    archive_path.write_bytes(archive_bytes)
+    log.info(f"Saved downloaded ad-domains archive to {archive_path} (hash {archive_hash})")
+    log.info(f"Fetched {len(domains):,} ad domains.")
+    return domains
+
+
+def add_known_list_to_blocklist(
+    domains, blocklist_path: Path = None, when: datetime = None, write_log: bool = True,
+    classification: str = "malware-list", reason: str = "on malware list",
+    log_prefix: str = "compromised_added", log_noun: str = "compromised",
+):
+    """Merge a known/curated domain list (compromised feed, ad list, ...)
+    into a blocklist "no questions asked" -- no LLM classification involved,
+    same as the existing compromised-domains merge this generalizes from."""
     blocklist_path = blocklist_path or Path("blocklist.txt")
-    log.info(f"Adding compromised domains to {blocklist_path}")
+    log.info(f"Adding {log_noun} domains to {blocklist_path}")
     existing_domains = set()
     if blocklist_path.exists():
         with blocklist_path.open("r", encoding="utf-8") as handle:
@@ -1286,7 +1392,7 @@ def add_compromised_to_blocklist(compromised, blocklist_path: Path = None, when:
 
     added_entries = []
     new_domains = set()
-    for domain in compromised:
+    for domain in domains:
         cleaned = domain.strip().lower()
         if not is_valid_domain(cleaned):
             continue
@@ -1294,8 +1400,8 @@ def add_compromised_to_blocklist(compromised, blocklist_path: Path = None, when:
         if cleaned not in existing_domains:
             added_entries.append({
                 "domain": cleaned,
-                "classification": "malware-list",
-                "reason": "on malware list",
+                "classification": classification,
+                "reason": reason,
             })
         new_domains.add(cleaned)
 
@@ -1306,11 +1412,27 @@ def add_compromised_to_blocklist(compromised, blocklist_path: Path = None, when:
             handle.write(f"{domain}\n")
 
     register_created(blocklist_path)
-    log.info(f"{blocklist_path} updated with compromised domains. Total domains: {len(combined_domains):,}")
+    log.info(f"{blocklist_path} updated with {log_noun} domains. Total domains: {len(combined_domains):,}")
 
     if write_log:
-        write_compromised_log(added_entries, when=when)
+        write_known_list_log(added_entries, when=when, prefix=log_prefix, noun=log_noun)
     return added_entries, len(combined_domains)
+
+
+def add_compromised_to_blocklist(compromised, blocklist_path: Path = None, when: datetime = None, write_log: bool = True):
+    return add_known_list_to_blocklist(
+        compromised, blocklist_path=blocklist_path, when=when, write_log=write_log,
+        classification="malware-list", reason="on malware list",
+        log_prefix="compromised_added", log_noun="compromised",
+    )
+
+
+def add_ad_domains_to_blocklist(ad_domains, blocklist_path: Path = None, when: datetime = None, write_log: bool = True):
+    return add_known_list_to_blocklist(
+        ad_domains, blocklist_path=blocklist_path, when=when, write_log=write_log,
+        classification="ad-list", reason="on known ad/tracking server list",
+        log_prefix="ad_domains_added", log_noun="ad",
+    )
 
 
 def parse_args():
@@ -1416,6 +1538,27 @@ def main():
             compromised_added, list1_final_total = [], list1_total_after_classify
             list2_final_total = list2_total_after_classify
 
+        # Known ad/tracking domains -- entirely outside the LLM classification
+        # scan, merged in "no questions asked" the same way the compromised
+        # feed is, and just as non-fatal if the source is unreachable.
+        ad_domains = []
+        ad_fetch_failed = False
+        try:
+            ad_domains = fetch_ad_domains(target_date)
+        except Exception as e:
+            ad_fetch_failed = True
+            log.error(f"Ad-domains fetch failed, skipping that step for this run: {e}", exc_info=True)
+
+        if ad_domains:
+            ad_added, list1_final_total = add_ad_domains_to_blocklist(
+                ad_domains, blocklist_path=list1_path, when=target_date, write_log=True,
+            )
+            _, list2_final_total = add_ad_domains_to_blocklist(
+                ad_domains, blocklist_path=list2_path, when=target_date, write_log=False,
+            )
+        else:
+            ad_added = []
+
         write_daily_digest(
             total_domains_scanned=len(domains),
             per_model=per_model,
@@ -1429,6 +1572,9 @@ def main():
             list2_final_total=list2_final_total,
             when=target_date,
             compromised_fetch_failed=compromised_fetch_failed,
+            ad_fetched=len(ad_domains),
+            ad_added=ad_added,
+            ad_fetch_failed=ad_fetch_failed,
         )
         hash_blocklist()
         push_to_github()
