@@ -1,0 +1,12 @@
+# NRDGuard allowlist
+#
+# One domain per line. Any domain listed here is removed from blocklist.txt
+# and blocklist_consensus.txt every run, even if it was already blocked by
+# a past run or gets freshly flagged (by a model or the compromised/ad-list
+# feeds) today. It stays visible in that day's flagged_domains log either
+# way -- this only suppresses the blocklist output, not the historical
+# record of what was flagged and why.
+#
+# Use this to durably correct a false positive. Add the domain, a run or
+# push away, and it's gone from both lists for good (until removed from
+# here).

@@ -793,6 +793,7 @@ def write_daily_digest(
     known_list_results,
     when: datetime = None,
     classification_skipped: bool = False,
+    allowlist_removed: int = 0,
 ):
     """known_list_results: {name: {"display_name": str, "fetched": int,
     "added": [...], "failed": bool}} -- one entry per known/curated source
@@ -857,6 +858,9 @@ def write_daily_digest(
         f"## List 2 -- blocklist_consensus.txt (model agreement{extra})",
         f"- After classification: {list2_total_after_classification:,} domains",
         f"- Final: {list2_final_total:,} domains",
+        "",
+        "## Allowlist",
+        f"- Domains suppressed: {allowlist_removed:,}",
         "",
     ]
 
@@ -1873,6 +1877,25 @@ def main():
                 "failed": failed,
             }
 
+        # Allowlist: a human-curated override for a false positive, checked
+        # once here rather than at every merge point above -- this is the
+        # single place that decides what actually gets written, so nothing
+        # upstream needs to know about it, and an existing wrongly-blocked
+        # domain gets removed retroactively the run after it's allowlisted,
+        # not just kept out of future merges. Deliberately doesn't touch
+        # all_flagged/the flagged-domains log -- that's a historical record
+        # of what the models actually said, and "flagged, but allowlisted"
+        # is itself worth being able to see later.
+        allowlist_path = Path("allowlist.txt")
+        allowlist_domains = load_valid_domains(allowlist_path)
+        allowlist_removed = (list1_domains | list2_domains) & allowlist_domains
+        if allowlist_removed:
+            log.info(f"Allowlist suppressing {len(allowlist_removed)} domain(s) from the blocklists: {sorted(allowlist_removed)[:10]}{'...' if len(allowlist_removed) > 10 else ''}")
+        list1_domains -= allowlist_domains
+        list2_domains -= allowlist_domains
+        if allowlist_path.exists():
+            register_created(allowlist_path)
+
         list1_final_total = write_blocklist(list1_path, list1_domains)
         list2_final_total = write_blocklist(list2_path, list2_domains)
 
@@ -1888,6 +1911,7 @@ def main():
             known_list_results=known_list_results,
             when=target_date,
             classification_skipped=classification_skipped,
+            allowlist_removed=len(allowlist_removed),
         )
         hash_blocklist()
         if not push_to_github():
