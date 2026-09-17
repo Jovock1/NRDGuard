@@ -27,7 +27,9 @@ What is NRDGuard the TL;DR:
 
 The Details:
  
-  The agent, downloads 2 lists. The first list is a list of confirmed websites known for malware. These get added to both blocklist.txt and blocklist_consensus.txt, no questions asked.
+  The agent downloads 3 lists. The first list is a list of confirmed websites known for malware. These get added to both blocklist.txt and blocklist_consensus.txt, no questions asked.
+
+  The third list is a known/curated list of ad and tracking servers (Peter Lowe's ad server list), entirely outside the AI scan below -- same as the malware list, these get added to both blocklist.txt and blocklist_consensus.txt, no questions asked.
 
   The second list is a list of all the newly created domains in the past 24 hours. Multiple AI models independently scan the names to try and determine if the name matches one of the following catagories:
   Scam
