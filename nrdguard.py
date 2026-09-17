@@ -19,9 +19,40 @@ from pathlib import Path
 import requests
 import time
 
+def load_local_env() -> None:
+    """Load variables from a local .env file when present."""
+    env_path = Path(__file__).resolve().parent / ".env"
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+# Called here (not just inside main()/generate_with_llama() like before) so
+# .env is loaded before OLLAMA_URL/OLLAMA_CHAT_TIMEOUT are read below --
+# load_local_env() only sets a var if it's not already set, so the later
+# calls are harmless no-ops once this has run. Safe to call at import time:
+# it only reads a file next to this script, no network/process side effects.
+load_local_env()
+
 try:
     import ollama
-    ollama_chat = ollama.chat
+    # ollama.chat() (the bare module function) has no per-call timeout --
+    # a hung cloud-relayed model would stall a batch, and the whole
+    # classification phase behind it, indefinitely with no way to notice
+    # except by hand. Build our own client with one instead.
+    OLLAMA_CHAT_TIMEOUT = float(os.getenv("OLLAMA_CHAT_TIMEOUT", "180"))
+    _ollama_client = ollama.Client(host=os.getenv("OLLAMA_URL") or None, timeout=OLLAMA_CHAT_TIMEOUT)
+    ollama_chat = _ollama_client.chat
 except Exception:
     ollama_chat = None
 
@@ -30,7 +61,11 @@ try:
 except Exception:
     dns = None
 
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s:%(name)s:%(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
 log = logging.getLogger(__name__)
 
 # Global env variables
@@ -89,22 +124,27 @@ def register_created(path: Path) -> None:
             pass
 
 
-def load_local_env() -> None:
-    """Load variables from a local .env file when present."""
-    env_path = Path(__file__).resolve().parent / ".env"
-    if not env_path.exists():
-        return
-
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
-            os.environ[key] = value
+def retry_with_backoff(fn, is_transient, max_attempts=5, base_delay=2.0, jitter=True, on_retry=None):
+    """Call fn() (a zero-arg callable) up to max_attempts times, retrying
+    only exceptions is_transient(exc) says are worth retrying, with
+    exponential backoff between attempts. Raises the final attempt's
+    exception either way (transient-but-exhausted, or not transient at
+    all) -- callers decide what to do with that themselves, same as
+    before this was factored out of three near-identical retry loops
+    (Ollama chat calls, feed HTTP fetches, the git push)."""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fn()
+        except Exception as e:
+            if is_transient(e) and attempt < max_attempts:
+                delay = base_delay * (2 ** (attempt - 1))
+                if jitter:
+                    delay += random.uniform(0, 1)
+                if on_retry:
+                    on_retry(attempt, max_attempts, delay, e)
+                time.sleep(delay)
+                continue
+            raise
 
 
 def _extract_text_from_response(data):
@@ -223,65 +263,63 @@ def generate_with_llama(prompt: str, max_tokens: int = 1000, system_prompt: str 
     load_local_env()
 
     model_name = model_name or os.getenv("LLAMA_MODEL_NAME", "gemma4:12b")
-    if ollama_chat is not None:
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
+    if ollama_chat is None:
+        raise RuntimeError(
+            "No Ollama chat client is available. Install the ollama package and ensure the local Ollama service is running."
+        )
 
-        max_attempts = 5
-        base_delay = 2.0  # seconds
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
 
-        for attempt in range(1, max_attempts + 1):
-            try:
-                response = ollama_chat(
-                    model=model_name,
-                    messages=messages,
-                    think=False,
-                    stream=False,
-                    format=response_format,
-                    options={"num_predict": max_tokens},
-                )
-                if isinstance(response, collections.abc.Iterator) or isinstance(response, (list, tuple)):
-                    response = list(response)
-                    response = response[-1] if response else None
+    def call():
+        response = ollama_chat(
+            model=model_name,
+            messages=messages,
+            think=False,
+            stream=False,
+            format=response_format,
+            options={"num_predict": max_tokens},
+        )
+        if isinstance(response, collections.abc.Iterator) or isinstance(response, (list, tuple)):
+            response = list(response)
+            response = response[-1] if response else None
 
-                content = getattr(getattr(response, "message", None), "content", None)
-                if isinstance(content, str) and content.strip():
-                    return content.strip()
+        content = getattr(getattr(response, "message", None), "content", None)
+        if isinstance(content, str) and content.strip():
+            return content.strip()
 
-                content = _extract_text_from_response(response)
-                if isinstance(content, str) and content.strip():
-                    return content.strip()
+        content = _extract_text_from_response(response)
+        if isinstance(content, str) and content.strip():
+            return content.strip()
 
-                raise RuntimeError(
-                    f"Ollama chat returned no usable response content: {content!r}. "
-                    f"Response type: {type(response).__name__}, response repr: {repr(response)}"
-                )
-            except Exception as e:
-                # Only retry errors that look transient (server overload, 5xx,
-                # timeouts, connection hiccups). A 4xx like "model not found"
-                # will never succeed no matter how many times we retry it.
-                status_code = getattr(e, "status_code", None)
-                transient = status_code is None or status_code >= 500
+        raise RuntimeError(
+            f"Ollama chat returned no usable response content: {content!r}. "
+            f"Response type: {type(response).__name__}, response repr: {repr(response)}"
+        )
 
-                if transient and attempt < max_attempts:
-                    delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, 1)
-                    log.warning(
-                        f"Ollama chat call failed on attempt {attempt}/{max_attempts} "
-                        f"(status_code={status_code}): {e}. Retrying in {delay:.1f}s..."
-                    )
-                    time.sleep(delay)
-                    continue
+    # Only retry errors that look transient (server overload, 5xx, timeouts,
+    # connection hiccups). A 4xx like "model not found" will never succeed
+    # no matter how many times we retry it.
+    def is_transient(e):
+        status_code = getattr(e, "status_code", None)
+        return status_code is None or status_code >= 500
 
-                raise RuntimeError(
-                    f"Ollama chat failed after {attempt} attempt(s): {e}. Install and run the Ollama "
-                    f"service locally and ensure the model '{model_name}' is available."
-                )
+    def on_retry(attempt, max_attempts, delay, e):
+        status_code = getattr(e, "status_code", None)
+        log.warning(
+            f"Ollama chat call failed on attempt {attempt}/{max_attempts} "
+            f"(status_code={status_code}): {e}. Retrying in {delay:.1f}s..."
+        )
 
-    raise RuntimeError(
-        "No Ollama chat client is available. Install the ollama package and ensure the local Ollama service is running."
-    )
+    try:
+        return retry_with_backoff(call, is_transient, max_attempts=5, base_delay=2.0, on_retry=on_retry)
+    except Exception as e:
+        raise RuntimeError(
+            f"Ollama chat failed after retrying: {e}. Install and run the Ollama "
+            f"service locally and ensure the model '{model_name}' is available."
+        ) from None
 
 
 CLASSIFICATION_CATEGORIES = [
@@ -1032,48 +1070,48 @@ def push_to_github():
         "the requested url returned error: 5",
     )
 
-    max_attempts = 5
-    base_delay = 5.0  # seconds
-    for attempt in range(1, max_attempts + 1):
-        try:
-            subprocess.run(
-                ["git", "-C", str(repo_dir), "-c", f"credential.helper={credential_helper}", "push", "-u", "origin", branch],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=push_env,
-            )
-            break
-        except subprocess.CalledProcessError as exc:
-            # exc's command/stdout/stderr never contain the token itself (only
-            # the literal string "$GITHUB_TOKEN", resolved by the nested shell
-            # at runtime, not by this process), so this is safe to log as-is.
-            # str(exc) alone omits stdout/stderr, which is where git's actual
-            # reason (auth failure, non-fast-forward, LFS error, etc.) lives --
-            # log those explicitly or every failure just says "exit status 1".
-            stderr = exc.stderr.decode("utf-8", "replace").strip() if exc.stderr else ""
-            stdout = exc.stdout.decode("utf-8", "replace").strip() if exc.stdout else ""
-            transient = any(marker in stderr.lower() for marker in TRANSIENT_GIT_MARKERS)
+    def call():
+        subprocess.run(
+            ["git", "-C", str(repo_dir), "-c", f"credential.helper={credential_helper}", "push", "-u", "origin", branch],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=push_env,
+        )
 
-            if transient and attempt < max_attempts:
-                delay = base_delay * (2 ** (attempt - 1))
-                log.warning(
-                    "Git push failed on attempt %d/%d (looks transient -- VPN/network blip): %s. "
-                    "Retrying in %.0fs...", attempt, max_attempts, stderr or exc, delay,
-                )
-                time.sleep(delay)
-                continue
+    def _stderr_of(e):
+        return e.stderr.decode("utf-8", "replace").strip() if getattr(e, "stderr", None) else ""
 
-            log.warning("Git push failed: %s", exc)
-            if stderr:
-                log.warning("git stderr: %s", stderr)
-            if stdout:
-                log.warning("git stdout: %s", stdout)
-            log.warning(
-                "Skipping GitHub push and continuing without failing the entire pipeline "
-                "-- the commit is safe locally and the next run will push it automatically."
-            )
-            return None
+    def is_transient(e):
+        return any(marker in _stderr_of(e).lower() for marker in TRANSIENT_GIT_MARKERS)
+
+    def on_retry(attempt, max_attempts, delay, e):
+        log.warning(
+            "Git push failed on attempt %d/%d (looks transient -- VPN/network blip): %s. "
+            "Retrying in %.0fs...", attempt, max_attempts, _stderr_of(e) or e, delay,
+        )
+
+    try:
+        # exc's command/stdout/stderr never contain the token itself (only
+        # the literal string "$GITHUB_TOKEN", resolved by the nested shell
+        # at runtime, not by this process), so this is safe to log as-is.
+        # str(exc) alone omits stdout/stderr, which is where git's actual
+        # reason (auth failure, non-fast-forward, LFS error, etc.) lives --
+        # log those explicitly or every failure just says "exit status 1".
+        retry_with_backoff(call, is_transient, max_attempts=5, base_delay=5.0, jitter=False, on_retry=on_retry)
+    except subprocess.CalledProcessError as exc:
+        stderr = _stderr_of(exc)
+        stdout = exc.stdout.decode("utf-8", "replace").strip() if exc.stdout else ""
+        log.warning("Git push failed: %s", exc)
+        if stderr:
+            log.warning("git stderr: %s", stderr)
+        if stdout:
+            log.warning("git stdout: %s", stdout)
+        log.warning(
+            "Skipping GitHub push and continuing without failing the entire pipeline "
+            "-- the commit is safe locally and the next run will push it automatically."
+        )
+        return None
 
     log.info("Pushed blocklist, logs, and hashes to GitHub")
     return True
@@ -1111,29 +1149,26 @@ def fetch_url(url, secrets, timeout=120):
                 text = text.replace(secret, "***REDACTED***")
         return text
 
-    max_attempts = 5
-    base_delay = 3.0  # seconds
+    def call():
+        r = requests.get(url, timeout=timeout)
+        r.raise_for_status()
+        return r
 
-    for attempt in range(1, max_attempts + 1):
-        try:
-            r = requests.get(url, timeout=timeout)
-            r.raise_for_status()
-            return r
-        except requests.exceptions.RequestException as e:
-            status_code = getattr(getattr(e, "response", None), "status_code", None)
-            transient = status_code is None or status_code >= 500
-            message = redact(str(e))
+    def is_transient(e):
+        status_code = getattr(getattr(e, "response", None), "status_code", None)
+        return status_code is None or status_code >= 500
 
-            if transient and attempt < max_attempts:
-                delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, 1)
-                log.warning(
-                    f"Request failed on attempt {attempt}/{max_attempts} "
-                    f"(status_code={status_code}): {message}. Retrying in {delay:.1f}s..."
-                )
-                time.sleep(delay)
-                continue
+    def on_retry(attempt, max_attempts, delay, e):
+        status_code = getattr(getattr(e, "response", None), "status_code", None)
+        log.warning(
+            f"Request failed on attempt {attempt}/{max_attempts} "
+            f"(status_code={status_code}): {redact(str(e))}. Retrying in {delay:.1f}s..."
+        )
 
-            raise RuntimeError(f"Request failed: {message}") from None
+    try:
+        return retry_with_backoff(call, is_transient, max_attempts=5, base_delay=3.0, on_retry=on_retry)
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"Request failed: {redact(str(e))}") from None
 
 
 def read_zip_member_text(archive_bytes, max_size=MAX_ARCHIVE_MEMBER_BYTES):
