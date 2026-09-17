@@ -12,6 +12,7 @@ import hashlib
 import shutil
 import subprocess
 import collections.abc
+import difflib
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -333,6 +334,25 @@ CLASSIFICATION_CATEGORIES = [
     "AI Deepfake/Impersonation",
 ]
 
+_CATEGORY_LOOKUP = {c.lower(): c for c in CLASSIFICATION_CATEGORIES}
+
+
+def _normalize_category(category):
+    """Return the canonical category name for a possibly-slightly-off model
+    response, or None if it doesn't resemble any real category closely
+    enough to trust. Despite the schema enum, this isn't just theoretical:
+    a real run produced "Gambing" (missing the 'l') that sailed through
+    uncaught into a category breakdown. Exact match (case-insensitive)
+    first; otherwise a close-match fuzzy check catches a typo like that
+    without accepting something that isn't actually one of our categories."""
+    if not category:
+        return None
+    exact = _CATEGORY_LOOKUP.get(category.strip().lower())
+    if exact:
+        return exact
+    close = difflib.get_close_matches(category.strip().lower(), _CATEGORY_LOOKUP.keys(), n=1, cutoff=0.8)
+    return _CATEGORY_LOOKUP[close[0]] if close else None
+
 # Requests the model constrain its output to this exact shape, eliminating
 # narration/preamble (see generate_with_llama docstring re: cloud vs local
 # enforcement strength). The category enum also normalizes labels that used
@@ -416,11 +436,14 @@ def classify_batch(batch, model_name: str = None):
     first_rejected = None
     for row in rows:
         domain = str(row.get("domain", "")).strip().lower() if isinstance(row, dict) else ""
-        category = str(row.get("category", "")).strip() if isinstance(row, dict) else ""
+        raw_category = str(row.get("category", "")).strip() if isinstance(row, dict) else ""
+        category = _normalize_category(raw_category)
         # Only trust rows naming a domain that was actually in this batch --
         # anything else is a hallucinated/misremembered domain, not a real
         # classification of the input we sent.
         if domain and category and is_valid_domain(domain) and domain in batch_domains:
+            if category != raw_category:
+                log.info("Normalized model category %r to %r for %s", raw_category, category, domain)
             flagged.append({"domain": domain, "category": category})
         else:
             rejected += 1
@@ -1201,6 +1224,12 @@ def read_zip_member_text(archive_bytes, max_size=MAX_ARCHIVE_MEMBER_BYTES):
 
 
 def fetch_domains(for_date: datetime = None):
+    """Returns the domain list, or None if the live feed is byte-identical
+    to the last archive (nothing new to classify). None is a deliberate
+    sentinel, not sys.exit(0) -- that used to kill the whole process here,
+    which also skipped the independent compromised/ad-list merges and the
+    push for the day. main() now treats None as "skip classification only"
+    and still runs everything else."""
     repo_dir = Path(__file__).resolve().parent
     archives_dir = repo_dir / "archives"
     archives_dir.mkdir(exist_ok=True)
@@ -1243,8 +1272,8 @@ def fetch_domains(for_date: datetime = None):
         latest_hash = hash_file(latest_archive)
         log.info(f"Latest local domains archive: {latest_archive} ({latest_hash})")
         if archive_hash == latest_hash:
-            log.info("Domains feed has not changed since the last archive. Exiting.")
-            sys.exit(0)
+            log.info("Domains feed has not changed since the last archive; nothing new to classify.")
+            return None
 
     now = datetime.now()
     archive_path = make_unique_timestamped_path(archives_dir, "domains", "zip", now)
@@ -1325,8 +1354,16 @@ def fetch_compromised_domains(for_date: datetime = None):
         latest_hash = hash_file(latest_archive)
         log.info(f"Latest local compromised archive: {latest_archive} ({latest_hash})")
         if archive_hash == latest_hash:
-            log.info("Compromised feed has not changed since the last archive. Exiting.")
-            sys.exit(0)
+            # Unlike fetch_domains(), there's no expensive reclassification
+            # to avoid here -- merging is a cheap no-op for domains already
+            # present. Just return the known list instead of sys.exit(0):
+            # that used to kill the whole process (skipping the independent
+            # ad-list merge and the push for the day) for what's actually
+            # a harmless, common case.
+            log.info("Compromised feed has not changed since the last archive.")
+            domains = read_zip_member_text(latest_archive.read_bytes()).splitlines()
+            domains = [d.strip().lower() for d in domains if d.strip()]
+            return domains
 
     now = datetime.now()
     archive_path = make_unique_timestamped_path(archives_dir, "compromised", "zip", now)
