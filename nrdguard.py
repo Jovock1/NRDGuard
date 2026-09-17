@@ -1052,7 +1052,13 @@ def push_to_github():
         log.warning("git lfs setup failed or not available: %s", exc)
 
     token = os.getenv("GITHUB_TOKEN")
-    repo_url = os.getenv("GITHUB_REPO","Jovock1/NRDGuard")
+    # No hardcoded fallback here on purpose -- a fork of this script that
+    # sets its own GITHUB_TOKEN but forgets GITHUB_REPO should fail loudly
+    # (the warning below) rather than quietly defaulting to pushing at
+    # someone else's actual repo (it would just get a permission error from
+    # GitHub, not silently succeed, but that's a confusing failure to debug
+    # compared to this warning naming the actual missing config).
+    repo_url = os.getenv("GITHUB_REPO")
     branch = os.getenv("GITHUB_BRANCH", "main")
 
     if not token or not repo_url:
@@ -1120,8 +1126,10 @@ def push_to_github():
     except subprocess.CalledProcessError:
         pass
 
-    subprocess.run(["git", "-C", str(repo_dir), "config", "user.name", "DomainBot"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    subprocess.run(["git", "-C", str(repo_dir), "config", "user.email", "domainbot@example.com"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    git_author_name = os.getenv("GIT_AUTHOR_NAME", "DomainBot")
+    git_author_email = os.getenv("GIT_AUTHOR_EMAIL", "domainbot@example.com")
+    subprocess.run(["git", "-C", str(repo_dir), "config", "user.name", git_author_name], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run(["git", "-C", str(repo_dir), "config", "user.email", git_author_email], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     subprocess.run(["git", "-C", str(repo_dir), "add", *[str(path) for path in files_to_add]], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     # commit only if there are changes
