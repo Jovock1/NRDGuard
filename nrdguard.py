@@ -40,7 +40,7 @@ BATCH_SIZE = 500
 # stricter consensus list (blocklist_consensus.txt) if every model here
 # agrees on both the domain and its category. Override via LLAMA_MODELS
 # (comma-separated) in .env.
-DEFAULT_MODELS = ["gemma4:31b-cloud", "qwen3.5:397b-cloud"]
+DEFAULT_MODELS = ["gemma4:31b-cloud", "nemotron-3-super:cloud"]
 
 # Used to look up nameservers for the flagged-domains log. Queried directly
 # rather than through the system resolver, since this machine also serves a
