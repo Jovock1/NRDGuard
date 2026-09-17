@@ -43,6 +43,13 @@ The Details:
 
   If ANY model determines the name matches one of these catagories, then it goes to blocklist.txt. If ALL models agree on the same domain and the same catagory, it also goes to blocklist_consensus.txt -- the idea being that requiring agreement across independent models filters out one-off hallucinations from a single model.
 
+Allowlist:
+  allowlist.txt (one domain per line) is a manually-curated override for false positives. Any domain listed
+  there is removed from both blocklist.txt and blocklist_consensus.txt every run -- including a domain a past
+  run already blocked, not just future ones. It's still visible in that day's flagged-domains log either way;
+  the allowlist only affects what actually ends up in the blocklists, not the historical record of what was
+  flagged and why.
+
 Logs:
   When a domain is added to blocklists.txt a log is created to try and determine how, when, and why it was added. This is created in both csv and json formats. 
   These can be found in the logs/csv and logs/json folders respectively
