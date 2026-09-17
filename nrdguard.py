@@ -1216,6 +1216,31 @@ def push_to_github():
     return True
 
 
+def send_notification(text: str) -> None:
+    """Best-effort webhook ping for anything worth knowing about without
+    reading the day's log or noticing GitHub went stale -- a known-list
+    fetch failing, a push still stuck after retrying. Posts a Slack-
+    compatible {"text": ...} payload (Slack, or anything pointed at a
+    compatible endpoint -- Discord's webhook API, ntfy.sh, a custom
+    receiver -- can consume this). No-op if NOTIFY_WEBHOOK_URL isn't set,
+    and never raises: a broken notification integration shouldn't fail the
+    pipeline that's trying to report something else already went wrong.
+
+    Every incident this month was only caught because a person happened to
+    notice something (stale GitHub, a VPN hiccup) and asked about it --
+    never because the pipeline said anything. The digest already flags
+    exactly these situations in its "## Note" section; this just makes
+    that visible without someone having to go looking for it.
+    """
+    url = os.getenv("NOTIFY_WEBHOOK_URL")
+    if not url:
+        return
+    try:
+        requests.post(url, json={"text": text}, timeout=10)
+    except Exception as e:
+        log.warning(f"Failed to send notification webhook: {e}")
+
+
 def get_api_key():
     log.info("Fetching API Key for URL API")
     URL_API_KEY = os.getenv('URL_API_KEY', '0')
@@ -1697,6 +1722,12 @@ def main():
             sys.exit(1)
         log.info(f"--resume: found existing classification for {target_date:%Y-%m-%d}; skipping re-classification.")
 
+    # Collected through the run and sent as one notification at the end (see
+    # send_notification()) -- every incident this month was only caught
+    # because a person happened to notice (stale GitHub, a VPN hiccup), never
+    # because the pipeline said anything itself.
+    issues = []
+
     # A previous run's push can fail (VPN kill switch blocking traffic while
     # it reconnects, most commonly) after its commit already succeeded --
     # that commit is then stuck local-only until something pushes it. Flush
@@ -1715,6 +1746,8 @@ def main():
             log.info(f"Found {pending_count} commit(s) not yet on GitHub from a previous run; attempting to push before starting today's work.")
             if push_to_github():
                 log.info("Pending commit(s) pushed successfully.")
+            else:
+                issues.append(f"{pending_count} commit(s) from a previous run are still not on GitHub after retrying just now.")
     except Exception:
         log.warning("Catch-up push for a previous run's pending commit failed; continuing with today's run.", exc_info=True)
 
@@ -1822,6 +1855,8 @@ def main():
 
             if not failed:
                 write_known_list_log(added_entries, when=target_date, prefix=source["log_prefix"], noun=source["log_noun"])
+            else:
+                issues.append(f"{source['display_name']} fetch failed and was skipped.")
 
             known_list_results[source["name"]] = {
                 "display_name": source["display_name"],
@@ -1847,10 +1882,19 @@ def main():
             classification_skipped=classification_skipped,
         )
         hash_blocklist()
-        push_to_github()
+        if not push_to_github():
+            issues.append("Final push to GitHub failed; today's commit is safe locally but not yet on GitHub.")
+
+        if issues:
+            date_label = target_date.strftime("%Y-%m-%d") if target_date else datetime.now().strftime("%Y-%m-%d")
+            send_notification(
+                f"NRDGuard run for {date_label} completed with issues:\n" + "\n".join(f"- {i}" for i in issues)
+            )
         log.info("=== Pipeline complete ===")
     except Exception as e:
         log.error(f"Unsafe New URL failed: {e}", exc_info=True)
+        date_label = target_date.strftime("%Y-%m-%d") if target_date else datetime.now().strftime("%Y-%m-%d")
+        send_notification(f"NRDGuard run for {date_label} failed: {e}")
         sys.exit(1)
 
 
