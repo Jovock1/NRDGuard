@@ -1042,11 +1042,12 @@ def push_to_github():
         except Exception:
             continue
 
-    # try to enable Git LFS and track both blocklists to avoid pushing >25MB files
+    # try to enable Git LFS and track large tracked files to avoid pushing >25MB files
     try:
         subprocess.run(["git", "-C", str(repo_dir), "lfs", "install"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         subprocess.run(["git", "-C", str(repo_dir), "lfs", "track", "blocklist.txt"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         subprocess.run(["git", "-C", str(repo_dir), "lfs", "track", "blocklist_consensus.txt"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(["git", "-C", str(repo_dir), "lfs", "track", "domain_first_seen.csv"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         # `git lfs track` rewrites .gitattributes on disk but nothing else
         # registers that change, so without this it silently never gets
         # committed and LFS tracking for new patterns never actually takes
@@ -1420,6 +1421,53 @@ def write_blocklist(path: Path, domains) -> int:
     register_created(path)
     log.info(f"{path} written. Total domains: {len(domains):,}")
     return len(domains)
+
+
+def load_first_seen_domains(path: Path) -> set:
+    """Just the set of domains already in the first-seen index (not their
+    dates) -- all a caller needs to decide what's genuinely new before
+    appending. Reading the ~2M-row-and-growing file this way instead of
+    into a dict keeps this to one string per entry rather than two."""
+    domains = set()
+    if path.exists():
+        with path.open("r", newline="", encoding="utf-8") as handle:
+            reader = csv.reader(handle)
+            next(reader, None)  # header
+            for row in reader:
+                if row:
+                    domains.add(row[0])
+    return domains
+
+
+def append_first_seen(path: Path, new_domains, when: datetime = None) -> int:
+    """Record today's date as the first-seen date for domains not already
+    in the index. Append-only by design: at this scale (millions of rows,
+    growing by tens of thousands a day) a full read-modify-write every run,
+    the way blocklist.txt works, would mean rewriting a many-times-larger
+    file just to add a few thousand rows. Never overwrites an existing
+    domain's date -- "first seen" means exactly that.
+
+    This is purely a data-collection step for future pruning (see
+    get_known_lists()/main()'s docstring-level notes on why removal is a
+    separate, later, human-reviewed decision) -- nothing reads this file
+    yet, and adding to it never changes what's blocked.
+    """
+    if not new_domains:
+        if path.exists():
+            register_created(path)
+        return 0
+
+    is_new_file = not path.exists()
+    now = when or datetime.now()
+    with path.open("a", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        if is_new_file:
+            writer.writerow(["domain", "first_seen"])
+        for domain in sorted(new_domains):
+            writer.writerow([domain, now.strftime("%Y-%m-%d")])
+    register_created(path)
+    log.info(f"{path}: recorded first-seen date for {len(new_domains):,} new domain(s).")
+    return len(new_domains)
 
 
 def add_to_blocklist(flagged, blocklist_path: Path = None):
@@ -1815,6 +1863,21 @@ def main():
             write_daily_log(all_flagged, when=target_date)
             write_category_summary(all_flagged, when=target_date)
             write_classification_stats(per_model, when=target_date)
+
+        # Record first-seen dates for classification-flagged domains (only
+        # -- never the compromised feed or ad list, since any future
+        # pruning will only ever apply to our own classification guesses,
+        # not those external authoritative sources). Pure data collection
+        # for now; nothing reads this yet. Safe to run unconditionally --
+        # already-indexed domains are filtered out, so a --resume re-run
+        # over the same all_flagged is a no-op here.
+        first_seen_path = Path("domain_first_seen.csv")
+        already_indexed = load_first_seen_domains(first_seen_path)
+        newly_seen = {
+            entry["domain"] for entry in all_flagged
+            if is_valid_domain(entry["domain"]) and entry["domain"] not in already_indexed
+        }
+        append_first_seen(first_seen_path, newly_seen, when=target_date)
 
         list1_path = Path("blocklist.txt")
         list2_path = Path("blocklist_consensus.txt")
