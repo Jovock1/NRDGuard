@@ -1,3 +1,4 @@
 logs/** filter=lfs diff=lfs merge=lfs -text
 blocklist.txt filter=lfs diff=lfs merge=lfs -text
 blocklist_consensus.txt filter=lfs diff=lfs merge=lfs -text
+domain_first_seen.csv filter=lfs diff=lfs merge=lfs -text
