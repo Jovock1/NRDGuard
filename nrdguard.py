@@ -1278,12 +1278,17 @@ def push_to_github():
 def send_notification(text: str) -> None:
     """Best-effort webhook ping for anything worth knowing about without
     reading the day's log or noticing GitHub went stale -- a known-list
-    fetch failing, a push still stuck after retrying. Posts a Slack-
-    compatible {"text": ...} payload (Slack, or anything pointed at a
-    compatible endpoint -- Discord's webhook API, ntfy.sh, a custom
-    receiver -- can consume this). No-op if NOTIFY_WEBHOOK_URL isn't set,
-    and never raises: a broken notification integration shouldn't fail the
-    pipeline that's trying to report something else already went wrong.
+    fetch failing, a push still stuck after retrying. No-op if
+    NOTIFY_WEBHOOK_URL isn't set, and never raises: a broken notification
+    integration shouldn't fail the pipeline that's trying to report
+    something else already went wrong.
+
+    Sends both "text" (Slack's incoming-webhook field) and "content"
+    (Discord's) in the same payload rather than detecting the provider from
+    the URL -- each platform reads the field it recognizes and ignores the
+    other, so one payload works for both without a Slack-vs-Discord branch
+    to keep in sync. ntfy.sh/a custom receiver can just read whichever key
+    they expect.
 
     Every incident this month was only caught because a person happened to
     notice something (stale GitHub, a VPN hiccup) and asked about it --
@@ -1295,7 +1300,7 @@ def send_notification(text: str) -> None:
     if not url:
         return
     try:
-        requests.post(url, json={"text": text}, timeout=10)
+        requests.post(url, json={"text": text, "content": text}, timeout=10)
     except Exception as e:
         log.warning(f"Failed to send notification webhook: {e}")
 
