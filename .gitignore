@@ -1,3 +1,4 @@
 .env
 logs/cron/
 .nrdguard.lock
+archives/
