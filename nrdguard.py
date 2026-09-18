@@ -1538,17 +1538,23 @@ def fetch_compromised_domains(for_date: datetime = None):
     if for_date is not None:
         date_str = for_date.strftime("%Y-%m-%d")
         archive_path = find_archive_for_date(archives_dir, "compromised", date_str)
-        if archive_path is None:
-            log.warning(
-                f"No compromised archive found for {date_str} in {archives_dir}; "
-                "skipping compromised-domains step for this replay."
-            )
-            return []
-        log.info(f"Replaying compromised archive {archive_path}")
-        domains = read_zip_member_text(archive_path.read_bytes()).splitlines()
-        domains = [d.strip().lower() for d in domains if d.strip()]
-        log.info(f"Loaded {len(domains):,} domains.")
-        return domains
+        if archive_path is not None:
+            log.info(f"Replaying compromised archive {archive_path}")
+            domains = read_zip_member_text(archive_path.read_bytes()).splitlines()
+            domains = [d.strip().lower() for d in domains if d.strip()]
+            log.info(f"Loaded {len(domains):,} domains.")
+            return domains
+        # No archive means that date's original fetch never got far enough
+        # to save one (exactly the --resume scenario this is falling back
+        # for: the run died on this exact step) -- there's nothing to
+        # replay, so fall through to a live fetch instead of skipping.
+        # This is a rolling "currently known compromised domains" list, not
+        # a strict point-in-time record, so today's current list is a
+        # reasonable best-effort backfill for that date.
+        log.warning(
+            f"No compromised archive found for {date_str} in {archives_dir}; "
+            "falling back to a live fetch instead of skipping."
+        )
 
     log.info("Fetching known compromised domains from API")
     APICall = os.getenv('API_CALL2', '0')
@@ -1638,17 +1644,23 @@ def fetch_ad_domains(for_date: datetime = None):
     if for_date is not None:
         date_str = for_date.strftime("%Y-%m-%d")
         archive_path = find_archive_for_date(archives_dir, "ads", date_str)
-        if archive_path is None:
-            log.warning(
-                f"No ad-domains archive found for {date_str} in {archives_dir}; "
-                "skipping ad-domains step for this replay."
-            )
-            return []
-        log.info(f"Replaying ad-domains archive {archive_path}")
-        domains = read_zip_member_text(archive_path.read_bytes()).splitlines()
-        domains = [d.strip().lower() for d in domains if d.strip()]
-        log.info(f"Loaded {len(domains):,} ad domains.")
-        return domains
+        if archive_path is not None:
+            log.info(f"Replaying ad-domains archive {archive_path}")
+            domains = read_zip_member_text(archive_path.read_bytes()).splitlines()
+            domains = [d.strip().lower() for d in domains if d.strip()]
+            log.info(f"Loaded {len(domains):,} ad domains.")
+            return domains
+        # No archive means that date's original fetch never got far enough
+        # to save one (exactly the --resume scenario this is falling back
+        # for: the run died on this exact step) -- there's nothing to
+        # replay, so fall through to a live fetch instead of skipping. This
+        # is a rolling "currently known ad servers" list, not a strict
+        # point-in-time record, so today's current list is a reasonable
+        # best-effort backfill for that date.
+        log.warning(
+            f"No ad-domains archive found for {date_str} in {archives_dir}; "
+            "falling back to a live fetch instead of skipping."
+        )
 
     log.info("Fetching known ad/tracking domains")
     r = fetch_url(AD_LIST_URL, secrets=[])
