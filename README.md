@@ -50,9 +50,16 @@ Allowlist:
   the allowlist only affects what actually ends up in the blocklists, not the historical record of what was
   flagged and why.
 
+Pruning:
+  A domain that was only ever flagged by our own AI classification (never confirmed by the compromised-domains
+  feed or the ad/tracking list) and hasn't been re-flagged or re-confirmed in over 180 days is treated as a
+  dead/abandoned campaign and removed from both blocklists. Domains sourced from the compromised feed or ad
+  list are never pruned this way. Every run logs which domains it pruned to logs/csv/pruned_domains_<date>.csv.
+
 Logs:
-  When a domain is added to blocklists.txt a log is created to try and determine how, when, and why it was added. This is created in both csv and json formats. 
-  These can be found in the logs/csv and logs/json folders respectively
+  When a domain is added to the blocklists a log is created to try and determine how, when, and why it was
+  added. These are CSV files under logs/csv. (A classification run also writes a JSON sidecar for its own
+  --resume bookkeeping under logs/json -- that one's an internal implementation detail, not a human-facing log.)
 
   The compromised log keeps track of the domains that have been pre-confirmed as malware. The
 

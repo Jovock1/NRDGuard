@@ -15,7 +15,7 @@ import collections.abc
 import difflib
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import requests
 import time
@@ -85,6 +85,13 @@ DEFAULT_MODELS = ["gemma4:31b-cloud", "nemotron-3-super:cloud"]
 NAMESERVER_RESOLVER_IP = os.getenv("NAMESERVER_RESOLVER_IP", "1.1.1.1")
 NAMESERVER_LOOKUP_WORKERS = 40
 NAMESERVER_LOOKUP_TIMEOUT = 3.0
+
+# Pruning: a classification-only domain (one we flagged ourselves, never
+# confirmed by the compromised feed or ad list) that hasn't been re-flagged
+# in this many days is presumed to be a dead/abandoned campaign rather than
+# an ongoing one, and is dropped from both blocklists -- see
+# prune_dormant_domains(). Override via PRUNE_AFTER_DAYS in .env.
+PRUNE_AFTER_DAYS = int(os.getenv("PRUNE_AFTER_DAYS", "180"))
 
 # Known ad/tracking server list, merged into both blocklists "no questions
 # asked" the same way the compromised-domains feed is -- entirely outside
@@ -661,7 +668,6 @@ def write_daily_log(flagged, when: datetime = None):
     now = when or datetime.now()
 
     csv_path = make_unique_timestamped_path(logs_subdir("csv"), "flagged_domains", "csv", now)
-    json_path = make_unique_timestamped_path(logs_subdir("json"), "flagged_domains", "json", now)
 
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=["domain", "classification", "model", "nameserver"])
@@ -674,21 +680,15 @@ def write_daily_log(flagged, when: datetime = None):
                 "nameserver": sanitize_csv_field(entry.get("nameserver", "")),
             })
 
-    with json_path.open("w", encoding="utf-8") as handle:
-        json.dump(flagged, handle, indent=2)
-        handle.write("\n")
-
     register_created(csv_path)
-    register_created(json_path)
-    log.info(f"Saved {len(flagged)} flagged entries to {csv_path} and {json_path}")
-    return csv_path, json_path
+    log.info(f"Saved {len(flagged)} flagged entries to {csv_path}")
+    return csv_path
 
 
 def write_category_summary(flagged, when: datetime = None):
     now = when or datetime.now()
 
     csv_path = make_unique_timestamped_path(logs_subdir("csv"), "category_summary", "csv", now)
-    json_path = make_unique_timestamped_path(logs_subdir("json"), "category_summary", "json", now)
 
     category_counts = count_categories(flagged)
     total = sum(category_counts.values())
@@ -701,14 +701,9 @@ def write_category_summary(flagged, when: datetime = None):
             writer.writerow({"category": sanitize_csv_field(row["category"]), "count": row["count"]})
         writer.writerow({"category": "TOTAL", "count": total})
 
-    with json_path.open("w", encoding="utf-8") as handle:
-        json.dump({"total": total, "categories": rows}, handle, indent=2)
-        handle.write("\n")
-
     register_created(csv_path)
-    register_created(json_path)
-    log.info(f"Saved category summary ({len(rows)} categories, {total:,} total) to {csv_path} and {json_path}")
-    return csv_path, json_path
+    log.info(f"Saved category summary ({len(rows)} categories, {total:,} total) to {csv_path}")
+    return csv_path
 
 
 def write_classification_stats(per_model, when: datetime = None):
@@ -735,12 +730,6 @@ def write_classification_stats(per_model, when: datetime = None):
     return path
 
 
-def _csv_sibling(json_path: Path) -> Path:
-    """logs/json/<name>.json -> logs/csv/<name>.csv, the fixed layout every
-    other log pair in this file already uses."""
-    return json_path.parent.parent / "csv" / json_path.with_suffix(".csv").name
-
-
 def load_resume_state(when: datetime):
     """For --resume: load a previously-completed classification for `when`
     (both a flagged_domains_<date> and a classification_stats_<date> log
@@ -749,16 +738,32 @@ def load_resume_state(when: datetime):
     None if either is missing, otherwise the parsed data plus every path
     involved, so main() can register_created() them: they were written by a
     run that died before reaching push_to_github(), so they exist on disk
-    but were never actually committed."""
+    but were never actually committed.
+
+    flagged_domains and category_summary are read back from their CSV log
+    (the only copy kept now -- see write_daily_log()/write_category_summary())
+    rather than a JSON sidecar. classification_stats has no CSV counterpart
+    (it's nested per-model stats, not a flat table) so it's still its own
+    JSON file."""
     date_str = when.strftime("%Y-%m-%d")
+    csv_dir = Path("logs") / "csv"
     json_dir = Path("logs") / "json"
-    flagged_path = find_archive_for_date(json_dir, "flagged_domains", date_str, extension="json")
+    flagged_path = find_archive_for_date(csv_dir, "flagged_domains", date_str, extension="csv")
     stats_path = find_archive_for_date(json_dir, "classification_stats", date_str, extension="json")
     if flagged_path is None or stats_path is None:
         return None
-    category_path = find_archive_for_date(json_dir, "category_summary", date_str, extension="json")
+    category_path = find_archive_for_date(csv_dir, "category_summary", date_str, extension="csv")
 
-    all_flagged = json.loads(flagged_path.read_text(encoding="utf-8"))
+    with flagged_path.open("r", newline="", encoding="utf-8") as handle:
+        all_flagged = [
+            {
+                "domain": row["domain"],
+                "category": row["classification"],
+                "model": row["model"],
+                "nameserver": row["nameserver"],
+            }
+            for row in csv.DictReader(handle)
+        ]
     raw_stats = json.loads(stats_path.read_text(encoding="utf-8"))
     per_model_stats = {
         model_name: {
@@ -773,11 +778,6 @@ def load_resume_state(when: datetime):
     paths = [flagged_path, stats_path]
     if category_path is not None:
         paths.append(category_path)
-    for p in (flagged_path, category_path):
-        if p is not None:
-            csv_sibling = _csv_sibling(p)
-            if csv_sibling.exists():
-                paths.append(csv_sibling)
 
     return {"all_flagged": all_flagged, "per_model_stats": per_model_stats, "paths": paths}
 
@@ -792,20 +792,15 @@ def write_known_list_log(entries, when: datetime = None, prefix: str = "compromi
     now = when or datetime.now()
 
     csv_path = make_unique_timestamped_path(logs_subdir("csv"), prefix, "csv", now)
-    json_path = make_unique_timestamped_path(logs_subdir("json"), prefix, "json", now)
 
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=["domain", "classification", "reason"])
         writer.writeheader()
         writer.writerows(entries)
 
-    with json_path.open("w", encoding="utf-8") as handle:
-        json.dump(entries, handle, indent=2)
-        handle.write("\n")
     register_created(csv_path)
-    register_created(json_path)
-    log.info(f"Saved {len(entries)} newly added {noun} domains to {csv_path} and {json_path}")
-    return csv_path, json_path
+    log.info(f"Saved {len(entries)} newly added {noun} domains to {csv_path}")
+    return csv_path
 
 
 def write_daily_digest(
@@ -821,6 +816,8 @@ def write_daily_digest(
     when: datetime = None,
     classification_skipped: bool = False,
     allowlist_removed: int = 0,
+    pruned_removed: int = 0,
+    pruning_skipped: bool = False,
 ):
     """known_list_results: {name: {"display_name": str, "fetched": int,
     "added": [...], "failed": bool}} -- one entry per known/curated source
@@ -908,6 +905,10 @@ def write_daily_digest(
         "## Allowlist",
         f"- Domains suppressed: {allowlist_removed:,}",
         "",
+        "## Pruning",
+        f"- Dormant domains removed (classification-only, not re-flagged or confirmed by a known list in "
+        f"over {PRUNE_AFTER_DAYS} days): {pruned_removed:,}",
+        "",
     ]
 
     notes = []
@@ -919,6 +920,12 @@ def write_daily_digest(
                 "nothing was merged in from that source this time. Re-run that step for "
                 "this date once the feed is reachable again."
             )
+    if pruning_skipped:
+        notes.append(
+            "Dormant-domain pruning was skipped for this run because a known-list fetch failed above -- "
+            "pruning needs a complete, up-to-date view of every known-list domain to safely tell a dead "
+            "campaign apart from one a source still confirms."
+        )
     if notes:
         lines.append("## Note")
         for note in notes:
@@ -1498,10 +1505,8 @@ def append_first_seen(path: Path, new_domains, when: datetime = None) -> int:
     file just to add a few thousand rows. Never overwrites an existing
     domain's date -- "first seen" means exactly that.
 
-    This is purely a data-collection step for future pruning (see
-    get_known_lists()/main()'s docstring-level notes on why removal is a
-    separate, later, human-reviewed decision) -- nothing reads this file
-    yet, and adding to it never changes what's blocked.
+    This is the data prune_dormant_domains() ages domains against -- see
+    that function and load_first_seen_dates().
     """
     if not new_domains:
         if path.exists():
@@ -1519,6 +1524,74 @@ def append_first_seen(path: Path, new_domains, when: datetime = None) -> int:
     register_created(path)
     log.info(f"{path}: recorded first-seen date for {len(new_domains):,} new domain(s).")
     return len(new_domains)
+
+
+def load_first_seen_dates(path: Path) -> dict:
+    """Like load_first_seen_domains(), but keeps the date too (as the raw
+    YYYY-MM-DD string -- that format sorts/compares lexicographically same
+    as chronologically, so prune_dormant_domains() never needs to parse it
+    into a real date)."""
+    dates = {}
+    if path.exists():
+        with path.open("r", newline="", encoding="utf-8") as handle:
+            reader = csv.reader(handle)
+            next(reader, None)  # header
+            for row in reader:
+                if len(row) >= 2:
+                    dates[row[0]] = row[1]
+    return dates
+
+
+def prune_dormant_domains(domains, first_seen_dates: dict, protected: set, when: datetime, max_age_days: int = PRUNE_AFTER_DAYS) -> set:
+    """Which of `domains` to drop from the blocklists as dormant: present
+    in the first-seen index (i.e. classification-sourced, never a
+    compromised-feed/ad-list domain -- see append_first_seen()'s caller)
+    with a first-seen date older than max_age_days, and not `protected`
+    (today's full compromised/ad-list fetch -- a domain still confirmed by
+    one of those stays no matter how old its first-seen date is).
+
+    A domain with no first-seen entry at all is left untouched -- pruning
+    only ever applies to our own classification guesses, never external
+    authoritative sources, which is also why those sources are never
+    indexed into domain_first_seen.csv in the first place.
+    """
+    now = when or datetime.now()
+    cutoff_str = (now - timedelta(days=max_age_days)).strftime("%Y-%m-%d")
+    pruned = set()
+    for domain in domains:
+        if domain in protected:
+            continue
+        first_seen = first_seen_dates.get(domain)
+        if first_seen is not None and first_seen < cutoff_str:
+            pruned.add(domain)
+    return pruned
+
+
+def write_pruned_log(pruned_domains, first_seen_dates: dict, when: datetime = None):
+    """Audit trail for prune_dormant_domains() -- every other change to the
+    blocklists (a classification flag, a known-list add) already gets its
+    own dated log, so a removal gets one too rather than silently vanishing
+    between one day's blocklist.txt and the next."""
+    if not pruned_domains:
+        log.info("No dormant domains to prune")
+        return None
+
+    now = when or datetime.now()
+    csv_path = make_unique_timestamped_path(logs_subdir("csv"), "pruned_domains", "csv", now)
+
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["domain", "first_seen", "reason"])
+        writer.writeheader()
+        for domain in sorted(pruned_domains):
+            writer.writerow({
+                "domain": domain,
+                "first_seen": first_seen_dates.get(domain, ""),
+                "reason": f"not re-flagged or confirmed by a known list in over {PRUNE_AFTER_DAYS} days",
+            })
+
+    register_created(csv_path)
+    log.info(f"Saved {len(pruned_domains)} pruned domain(s) to {csv_path}")
+    return csv_path
 
 
 def add_to_blocklist(flagged, blocklist_path: Path = None):
@@ -1837,9 +1910,9 @@ def main():
         if resume_state is None:
             log.error(
                 f"--resume given but no prior classification found for {target_date:%Y-%m-%d} "
-                "(need both a flagged_domains and a classification_stats log for that date "
-                "in logs/json/ -- the latter is only written by runs after this feature was "
-                "added, so an older date can't be resumed this way). Omit --resume to run a "
+                "(need a flagged_domains log in logs/csv/ and a classification_stats log in "
+                "logs/json/ for that date -- the latter is only written by runs after this "
+                "feature was added, so an older date can't be resumed this way). Omit --resume to run a "
                 "full classification for this date."
             )
             sys.exit(1)
@@ -1928,10 +2001,9 @@ def main():
             write_classification_stats(per_model, when=target_date)
 
         # Record first-seen dates for classification-flagged domains (only
-        # -- never the compromised feed or ad list, since any future
-        # pruning will only ever apply to our own classification guesses,
-        # not those external authoritative sources). Pure data collection
-        # for now; nothing reads this yet. Safe to run unconditionally --
+        # -- never the compromised feed or ad list, since pruning below
+        # only ever applies to our own classification guesses, not those
+        # external authoritative sources). Safe to run unconditionally --
         # already-indexed domains are filtered out, so a --resume re-run
         # over the same all_flagged is a no-op here.
         first_seen_path = Path("domain_first_seen.csv")
@@ -1972,6 +2044,8 @@ def main():
         # over it is worse than shipping a run with that one source visibly
         # flagged as skipped in the digest.
         known_list_results = {}
+        known_list_domains = set()  # every domain any known source currently confirms -- see prune_dormant_domains()
+        any_known_list_fetch_failed = False
         for source in get_known_lists():
             fetched_domains = []
             failed = False
@@ -1979,6 +2053,7 @@ def main():
                 fetched_domains = source["fetch"](target_date)
             except Exception as e:
                 failed = True
+                any_known_list_fetch_failed = True
                 log.error(f"{source['display_name']} fetch failed, skipping that step for this run: {e}", exc_info=True)
 
             added_entries = []
@@ -1986,6 +2061,7 @@ def main():
                 cleaned = domain.strip().lower()
                 if not is_valid_domain(cleaned):
                     continue
+                known_list_domains.add(cleaned)
                 if cleaned not in list1_domains:
                     added_entries.append({"domain": cleaned, "classification": source["classification"], "reason": source["reason"]})
                 list1_domains.add(cleaned)
@@ -2002,6 +2078,30 @@ def main():
                 "added": added_entries,
                 "failed": failed,
             }
+
+        # Pruning: drop classification-only domains (never confirmed by a
+        # known list) that haven't been re-flagged in PRUNE_AFTER_DAYS --
+        # see prune_dormant_domains(). Skipped entirely if any known-list
+        # fetch failed above, since known_list_domains would then be
+        # incomplete for this run and could falsely let through a prune of
+        # a domain that's actually still on a source we just couldn't
+        # reach today.
+        pruned_domains = set()
+        if any_known_list_fetch_failed:
+            log.info("Skipping dormant-domain pruning this run: a known-list fetch failed, so the protected set would be incomplete.")
+        else:
+            first_seen_dates = load_first_seen_dates(first_seen_path)
+            pruned_domains = prune_dormant_domains(
+                list1_domains | list2_domains, first_seen_dates, known_list_domains, when=target_date,
+            )
+            if pruned_domains:
+                log.info(
+                    f"Pruning {len(pruned_domains)} dormant domain(s) not re-flagged/confirmed in over "
+                    f"{PRUNE_AFTER_DAYS} days: {sorted(pruned_domains)[:10]}{'...' if len(pruned_domains) > 10 else ''}"
+                )
+            write_pruned_log(pruned_domains, first_seen_dates, when=target_date)
+            list1_domains -= pruned_domains
+            list2_domains -= pruned_domains
 
         # Allowlist: a human-curated override for a false positive, checked
         # once here rather than at every merge point above -- this is the
@@ -2038,6 +2138,8 @@ def main():
             when=target_date,
             classification_skipped=classification_skipped,
             allowlist_removed=len(allowlist_removed),
+            pruned_removed=len(pruned_domains),
+            pruning_skipped=any_known_list_fetch_failed,
         )
         hash_blocklist()
         if not push_to_github():
