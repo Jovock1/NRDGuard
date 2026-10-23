@@ -3,12 +3,19 @@ What is NRDGuard the TL;DR:
   It is a list of domains that have been marked as Scam, Gambling, Typoquatting, Malware, Ads, Tracking, Cryptojacking, and AI Deepfake impersonations.
 
   It is designed to be read by PI-Hole to block these sites on your network. Simply add a new list to PI-Hole that points to
-  https://media.githubusercontent.com/media/Jovock1/NRDGuard/refs/heads/main/blocklist.txt and you are good to go.
+  https://github.com/Jovock1/NRDGuard/releases/download/blocklist-latest/blocklist.txt and you are good to go.
 
   There are two lists available:
   - blocklist.txt -- broader coverage. A domain is included if ANY AI model flags it.
   - blocklist_consensus.txt -- stricter, fewer false positives. A domain is only included if ALL AI models agree on both the domain and its category. Available at
-    https://media.githubusercontent.com/media/Jovock1/NRDGuard/refs/heads/main/blocklist_consensus.txt
+    https://github.com/Jovock1/NRDGuard/releases/download/blocklist-latest/blocklist_consensus.txt
+
+  NOTE: these URLs changed (previously served via Git LFS/media.githubusercontent.com). blocklist.txt and
+  blocklist_consensus.txt are now published as assets on a single persistent "blocklist-latest" release,
+  replaced every run, rather than committed to git -- each was a full-file rewrite every day, and Git LFS
+  has no delta compression between versions, so committing them daily cost far more storage than their
+  actual size would suggest. If you set up Pi-hole before this change, update the list URL to the new one
+  above.
 
   This list is updated daily, so you have the newest threats blocked. 
   

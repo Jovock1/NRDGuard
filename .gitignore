@@ -3,3 +3,13 @@ logs/cron/
 .nrdguard.lock
 archives/
 .claude/
+
+# Published via a GitHub release asset instead of a git commit -- see
+# RELEASE_HOSTED_FILENAMES/publish_release_hosted_files() in nrdguard.py.
+# Still written to disk locally every run; just no longer git-tracked.
+blocklist.txt
+blocklist.txt.sha256
+blocklist_consensus.txt
+blocklist_consensus.txt.sha256
+domain_first_seen.csv
+domain_first_seen.csv.sha256

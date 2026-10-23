@@ -93,6 +93,16 @@ NAMESERVER_LOOKUP_TIMEOUT = 3.0
 # prune_dormant_domains(). Override via PRUNE_AFTER_DAYS in .env.
 PRUNE_AFTER_DAYS = int(os.getenv("PRUNE_AFTER_DAYS", "180"))
 
+# blocklist.txt, blocklist_consensus.txt, and domain_first_seen.csv are
+# published as assets on this one persistent GitHub release instead of
+# being git-committed -- see publish_release_hosted_files(). Git LFS has no
+# delta compression between versions of the same path, so committing these
+# three (each a full rewrite every run) cost ~8.7GB/month of LFS storage on
+# their own, blowing through the included 10GB quota by themselves. Release
+# assets aren't LFS-billed. Override the tag via BLOCKLIST_RELEASE_TAG.
+BLOCKLIST_RELEASE_TAG = os.getenv("BLOCKLIST_RELEASE_TAG", "blocklist-latest")
+RELEASE_HOSTED_FILENAMES = {"blocklist.txt", "blocklist_consensus.txt", "domain_first_seen.csv"}
+
 # Known ad/tracking server list, merged into both blocklists "no questions
 # asked" the same way the compromised-domains feed is -- entirely outside
 # the LLM classification scan. Peter Lowe's list: plain domain-per-line,
@@ -1070,10 +1080,134 @@ def hash_blocklist():
     return hash_paths
 
 
+def _github_api_headers(token):
+    return {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+
+
+def get_or_create_release(repo_url, token, tag=BLOCKLIST_RELEASE_TAG):
+    """Fetch the persistent release blocklist.txt/blocklist_consensus.txt/
+    domain_first_seen.csv publish through, creating it the first time it's
+    needed. Its assets get replaced wholesale every run (see
+    upload_release_asset()) rather than a new release being cut daily --
+    the point is one stable download URL per file, not a history of
+    releases (that history is exactly what LFS was costing so much for)."""
+    api_base = f"https://api.github.com/repos/{repo_url}"
+    headers = _github_api_headers(token)
+
+    def call():
+        r = requests.get(f"{api_base}/releases/tags/{tag}", headers=headers, timeout=30)
+        if r.status_code == 404:
+            r = requests.post(
+                f"{api_base}/releases", headers=headers, timeout=30,
+                json={
+                    "tag_name": tag,
+                    "name": "Latest blocklist",
+                    "body": (
+                        "Always-current blocklist.txt, blocklist_consensus.txt, and "
+                        "domain_first_seen.csv, replaced every run -- not a dated "
+                        "snapshot. Use these asset URLs directly (not a git clone/LFS "
+                        "pull) for Pi-hole or any other consumer. See the README."
+                    ),
+                },
+            )
+        r.raise_for_status()
+        return r.json()
+
+    def is_transient(e):
+        status_code = getattr(getattr(e, "response", None), "status_code", None)
+        return status_code is None or status_code >= 500
+
+    return retry_with_backoff(call, is_transient)
+
+
+def upload_release_asset(release, path: Path, token):
+    """Replace (delete + re-upload) a single asset on `release` with the
+    current content of `path`. The releases API has no "replace" verb -- an
+    asset with a name already present on the release is rejected as a
+    duplicate unless the old one is deleted first."""
+    headers = _github_api_headers(token)
+    for asset in release.get("assets", []):
+        if asset["name"] == path.name:
+            del_resp = requests.delete(asset["url"], headers=headers, timeout=30)
+            if del_resp.status_code not in (204, 404):
+                del_resp.raise_for_status()
+            break
+
+    upload_url = release["upload_url"].split("{")[0]
+
+    def call():
+        with path.open("rb") as handle:
+            r = requests.post(
+                upload_url,
+                headers={**headers, "Content-Type": "application/octet-stream"},
+                params={"name": path.name},
+                data=handle,
+                timeout=300,
+            )
+        r.raise_for_status()
+        return r.json()
+
+    def is_transient(e):
+        status_code = getattr(getattr(e, "response", None), "status_code", None)
+        return status_code is None or status_code >= 500
+
+    def on_retry(attempt, max_attempts, delay, e):
+        log.warning(
+            f"Release asset upload for {path.name} failed on attempt {attempt}/{max_attempts}: "
+            f"{e}. Retrying in {delay:.1f}s..."
+        )
+
+    return retry_with_backoff(call, is_transient, on_retry=on_retry)
+
+
+def publish_release_hosted_files(paths) -> bool:
+    """Upload every existing path in `paths` to the persistent blocklist
+    release (see RELEASE_HOSTED_FILENAMES/BLOCKLIST_RELEASE_TAG), replacing
+    git/LFS as the distribution mechanism for these files. Returns True if
+    every upload succeeded. Never raises -- a failed upload here shouldn't
+    take down the rest of the run, same reasoning as a failed known-list
+    fetch: today's local files are still correct and still get hashed, only
+    the published copies would be stale until the next run retries."""
+    token = os.getenv("GITHUB_TOKEN")
+    repo_url = os.getenv("GITHUB_REPO")
+    if not token or not repo_url:
+        log.warning("GITHUB_TOKEN or GITHUB_REPO not set; skipping release publish")
+        return False
+
+    existing = [p for p in paths if p.exists()]
+    if not existing:
+        return True
+
+    try:
+        release = get_or_create_release(repo_url, token)
+    except Exception:
+        log.error("Could not fetch/create the blocklist release; skipping release publish this run.", exc_info=True)
+        return False
+
+    ok = True
+    for path in existing:
+        try:
+            upload_release_asset(release, path, token)
+            log.info(f"Published {path} to the '{BLOCKLIST_RELEASE_TAG}' release")
+        except Exception:
+            log.error(f"Failed to publish {path} to the '{BLOCKLIST_RELEASE_TAG}' release", exc_info=True)
+            ok = False
+    return ok
+
+
+def _is_release_hosted(path: Path) -> bool:
+    """True for blocklist.txt/blocklist_consensus.txt/domain_first_seen.csv
+    and their .sha256 sidecars -- published via publish_release_hosted_files()
+    instead of a git commit, so push_to_github() must never stage them."""
+    name = path.name
+    if name.endswith(".sha256"):
+        name = name[: -len(".sha256")]
+    return name in RELEASE_HOSTED_FILENAMES
+
+
 def push_to_github():
     repo_dir = Path(__file__).resolve().parent
     blocklist_path = repo_dir / "blocklist.txt"
-    consensus_blocklist_path = repo_dir / "blocklist_consensus.txt"
     logs_dir = repo_dir / "logs"
     # Only include .sha256 files that were created during this run
     sha_files = []
@@ -1095,17 +1229,13 @@ def push_to_github():
         except Exception:
             continue
 
-    # try to enable Git LFS and track large tracked files to avoid pushing >25MB files
+    # Only logs/** is LFS-tracked now -- blocklist.txt/blocklist_consensus.txt/
+    # domain_first_seen.csv moved to publish_release_hosted_files() instead
+    # (see RELEASE_HOSTED_FILENAMES). `git lfs install` still needs to run so
+    # the LFS filters are registered for whatever .gitattributes already
+    # tracks.
     try:
         subprocess.run(["git", "-C", str(repo_dir), "lfs", "install"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subprocess.run(["git", "-C", str(repo_dir), "lfs", "track", "blocklist.txt"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subprocess.run(["git", "-C", str(repo_dir), "lfs", "track", "blocklist_consensus.txt"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subprocess.run(["git", "-C", str(repo_dir), "lfs", "track", "domain_first_seen.csv"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        # `git lfs track` rewrites .gitattributes on disk but nothing else
-        # registers that change, so without this it silently never gets
-        # committed and LFS tracking for new patterns never actually takes
-        # effect on the remote.
-        register_created(repo_dir / ".gitattributes")
     except subprocess.CalledProcessError as exc:
         log.warning("git lfs setup failed or not available: %s", exc)
 
@@ -1154,21 +1284,6 @@ def push_to_github():
         if p.exists() and p not in files_to_add:
             files_to_add.append(p)
 
-    # Always include both blocklists and their hashes if present (primary artifacts)
-    try:
-        if blocklist_path.exists() and blocklist_path.resolve() not in files_to_add:
-            files_to_add.insert(0, blocklist_path)
-        blocklist_sha = repo_dir / (blocklist_path.name + ".sha256")
-        if blocklist_sha.exists() and blocklist_sha.resolve() not in files_to_add:
-            files_to_add.insert(1, blocklist_sha)
-        if consensus_blocklist_path.exists() and consensus_blocklist_path.resolve() not in files_to_add:
-            files_to_add.append(consensus_blocklist_path)
-        consensus_sha = repo_dir / (consensus_blocklist_path.name + ".sha256")
-        if consensus_sha.exists() and consensus_sha.resolve() not in files_to_add:
-            files_to_add.append(consensus_sha)
-    except Exception:
-        pass
-
     # include .gitattributes only if it was created this run
     gitattributes = repo_dir / ".gitattributes"
     try:
@@ -1177,7 +1292,12 @@ def push_to_github():
     except Exception:
         pass
 
-    files_to_add = [path for path in files_to_add if path.exists()]
+    # blocklist.txt/blocklist_consensus.txt/domain_first_seen.csv (and their
+    # .sha256 sidecars) are registered via register_created() so
+    # hash_blocklist() still hashes them, but they're published through
+    # publish_release_hosted_files() instead of a git commit -- never stage
+    # them here even though they're in CREATED_FILES.
+    files_to_add = [path for path in files_to_add if path.exists() and not _is_release_hosted(path)]
 
     try:
         subprocess.run(["git", "-C", str(repo_dir), "init"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -2142,6 +2262,18 @@ def main():
             pruning_skipped=any_known_list_fetch_failed,
         )
         hash_blocklist()
+
+        release_paths = []
+        for p in (list1_path, list2_path, first_seen_path):
+            release_paths.append(p)
+            release_paths.append(Path(f"{p}.sha256"))
+        if not publish_release_hosted_files(release_paths):
+            issues.append(
+                f"Publishing blocklist.txt/blocklist_consensus.txt/domain_first_seen.csv to the "
+                f"'{BLOCKLIST_RELEASE_TAG}' release failed; local files are correct but the published "
+                "copies may be stale until the next run retries."
+            )
+
         if not push_to_github():
             issues.append("Final push to GitHub failed; today's commit is safe locally but not yet on GitHub.")
 
