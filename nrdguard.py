@@ -1229,15 +1229,12 @@ def push_to_github():
         except Exception:
             continue
 
-    # Only logs/** is LFS-tracked now -- blocklist.txt/blocklist_consensus.txt/
-    # domain_first_seen.csv moved to publish_release_hosted_files() instead
-    # (see RELEASE_HOSTED_FILENAMES). `git lfs install` still needs to run so
-    # the LFS filters are registered for whatever .gitattributes already
-    # tracks.
-    try:
-        subprocess.run(["git", "-C", str(repo_dir), "lfs", "install"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except subprocess.CalledProcessError as exc:
-        log.warning("git lfs setup failed or not available: %s", exc)
+    # This project no longer uses Git LFS at all: blocklist.txt/
+    # blocklist_consensus.txt/domain_first_seen.csv publish via
+    # publish_release_hosted_files() (see RELEASE_HOSTED_FILENAMES), and
+    # logs/** switched to plain git blobs after the account's LFS budget
+    # ran out mid-month and started blocking every push, even tiny ones --
+    # .gitattributes has no LFS rules left, so there's nothing to install.
 
     token = os.getenv("GITHUB_TOKEN")
     # No hardcoded fallback here on purpose -- a fork of this script that
