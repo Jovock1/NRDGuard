@@ -55,28 +55,23 @@ Nameservers hosting 2+ of today's flagged domains -- often a sign of one operato
 | adaline.ns.cloudflare.com | 37 |
 
 ## Compromised Domains Feed
-- Domains fetched: 0
-- Newly added: 0
+- Domains fetched: 1,604,674
+- Newly added: 16,566
 
 ## Ad/Tracking Domains Feed
 - Domains fetched: 3,564
-- Newly added: 1
+- Newly added: 0
 
 ## List 1 -- blocklist.txt (union of all models + Compromised Domains + Ad/Tracking Domains)
-- After classification: 8,420,085 domains
-- Final: 8,420,086 domains
+- After classification: 8,420,086 domains
+- Final: 8,436,652 domains
 
 ## List 2 -- blocklist_consensus.txt (model agreement + Compromised Domains + Ad/Tracking Domains)
-- After classification: 5,898,753 domains
-- Final: 5,898,754 domains
+- After classification: 5,898,754 domains
+- Final: 5,921,935 domains
 
 ## Allowlist
 - Domains suppressed: 0
 
 ## Pruning
 - Dormant domains removed (classification-only, not re-flagged or confirmed by a known list in over 180 days): 0
-
-## Note
-The compromised domains fetch failed for this run (see the run's log) and was skipped rather than aborting the whole pipeline -- nothing was merged in from that source this time. Re-run that step for this date once the feed is reachable again.
-
-Dormant-domain pruning was skipped for this run because a known-list fetch failed above -- pruning needs a complete, up-to-date view of every known-list domain to safely tell a dead campaign apart from one a source still confirms.
