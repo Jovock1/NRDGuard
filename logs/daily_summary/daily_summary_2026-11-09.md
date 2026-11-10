@@ -55,8 +55,8 @@ Nameservers hosting 2+ of today's flagged domains -- often a sign of one operato
 | dns1.registrar-servers.com | 50 |
 
 ## Compromised Domains Feed
-- Domains fetched: 0
-- Newly added: 0
+- Domains fetched: 1,539,863
+- Newly added: 73,150
 
 ## Ad/Tracking Domains Feed
 - Domains fetched: 3,560
@@ -64,19 +64,14 @@ Nameservers hosting 2+ of today's flagged domains -- often a sign of one operato
 
 ## List 1 -- blocklist.txt (union of all models + Compromised Domains + Ad/Tracking Domains)
 - After classification: 8,595,632 domains
-- Final: 8,595,632 domains
+- Final: 8,668,782 domains
 
 ## List 2 -- blocklist_consensus.txt (model agreement + Compromised Domains + Ad/Tracking Domains)
 - After classification: 6,022,581 domains
-- Final: 6,022,581 domains
+- Final: 6,102,191 domains
 
 ## Allowlist
 - Domains suppressed: 0
 
 ## Pruning
 - Dormant domains removed (classification-only, not re-flagged or confirmed by a known list in over 180 days): 0
-
-## Note
-The compromised domains fetch failed for this run (see the run's log) and was skipped rather than aborting the whole pipeline -- nothing was merged in from that source this time. Re-run that step for this date once the feed is reachable again.
-
-Dormant-domain pruning was skipped for this run because a known-list fetch failed above -- pruning needs a complete, up-to-date view of every known-list domain to safely tell a dead campaign apart from one a source still confirms.
