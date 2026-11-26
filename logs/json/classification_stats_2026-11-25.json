@@ -1,0 +1,32 @@
+{
+  "gemma4:31b-cloud": {
+    "total_batches": 671,
+    "zero_flag_batches": 11,
+    "failed_batches": 0,
+    "category_counts": {
+      "Gambling": 11997,
+      "Scams/Phishing": 1778,
+      "Malware/C2": 779,
+      "Typosquatting": 673,
+      "Cryptojacking": 53,
+      "Ads": 62,
+      "AI Deepfake/Impersonation": 82,
+      "Tracking/Analytics": 30
+    }
+  },
+  "nemotron-3-super:cloud": {
+    "total_batches": 671,
+    "zero_flag_batches": 391,
+    "failed_batches": 0,
+    "category_counts": {
+      "Ads": 327,
+      "Scams/Phishing": 199,
+      "Gambling": 1194,
+      "Malware/C2": 28,
+      "Tracking/Analytics": 29,
+      "Typosquatting": 44,
+      "Cryptojacking": 5,
+      "AI Deepfake/Impersonation": 10
+    }
+  }
+}
